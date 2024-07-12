@@ -5,11 +5,11 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
+import torch.nn.functional as F
 from .nanogpt import MLP, CausalSelfAttention, LayerNorm
 from einops import repeat
 
 
-# %%
 class LayerNormAndLayer(nn.Module):
     def __init__(self, layer, n_embd, bias):
         super(LayerNormAndLayer, self).__init__()
@@ -20,9 +20,10 @@ class LayerNormAndLayer(nn.Module):
         return self.layer(self.ln(x))
 
 
-class LoopedBlock(nn.Module):
+# Lie-Trotter splitting scheme with the Euler’s method
+class TransformerBlock(nn.Module):
     def __init__(self, config):
-        super(LoopedBlock, self).__init__()
+        super(TransformerBlock, self).__init__()
         self.layers = nn.ModuleList()
         for _ in range(config.n_layer):
             self.layers.append(
@@ -40,20 +41,73 @@ class LoopedBlock(nn.Module):
         return layer(x)
 
 
+# Lie-Trotter splitting scheme with the Euler’s method
+class KolmogorovBlock(nn.Module):
+    def __init__(self, config):
+        super(TransformerBlock, self).__init__()
+        self.layers = nn.ModuleList()
+        for _ in range(config.n_layer):
+            self.layers.append(
+                LayerNormAndLayer(MLP(config), config.n_embd, config.bias)
+            )
+            self.layers.append(
+                LayerNormAndLayer(
+                    CausalSelfAttention(config), config.n_embd, config.bias
+                )
+            )
+
+    def forward(self, x: torch.Tensor, t: int):
+        t = t % len(self.layers)
+        layer = self.layers[t]
+        return layer(x)
+
+
+# Strang-Marchuk Splitting Scheme
+class StrangMarchukBlock(nn.Module):
+    def __init__(self, config):
+        super(TransformerBlock, self).__init__()
+        self.layers = nn.ModuleList()
+        for _ in range(config.n_layer):
+            self.layers.append(
+                LayerNormAndLayer(MLP(config), config.n_embd, config.bias)
+            )
+            self.layers.append(
+                LayerNormAndLayer(
+                    CausalSelfAttention(config), config.n_embd, config.bias
+                )
+            )
+            self.layers.append(
+                LayerNormAndLayer(MLP(config), config.n_embd, config.bias)
+            )
+
+    def forward(self, x: torch.Tensor, t: int):
+        t = t % len(self.layers)
+        if t % 3 == 0:
+            mlp1 = self.layers[t]
+            return mlp1(x) / 2
+        elif t % 3 == 1:
+            attn = self.layers[t]
+            return attn(x)
+        else:
+            mlp2 = self.layers[t]
+            return mlp2(x) / 2
+
+
 @dataclass
 class LoopedConfig:
+    block_size: int = 128
+    vocab_size: int = 1024
     n_layer: int = 5
     n_head: int = 4
     n_embd: int = 64
     n_reg_tokens: int = 4
     bias: bool = True
     dropout: float = 0.0
-    block_size: int = 128
 
 
 class LoopedTransformer(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, config: LoopedConfig):
         super().__init__()
         # assert config.vocab_size is not None
         # assert config.block_size is not None
@@ -61,12 +115,14 @@ class LoopedTransformer(nn.Module):
 
         self.transformer = nn.ModuleDict(
             dict(
+                wte=nn.Embedding(config.vocab_size, config.n_embd),
                 wpe=nn.Embedding(config.block_size, config.n_embd),
                 drop=nn.Dropout(config.dropout),
-                looped_block=LoopedBlock(config),
+                looped_block=TransformerBlock(config),
                 ln_f=LayerNorm(config.n_embd, bias=config.bias),
             )
         )
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         # init all weights
         self.apply(self._init_weights)
@@ -101,9 +157,10 @@ class LoopedTransformer(nn.Module):
 
     def forward(
         self,
-        x,
+        inputs_idx=None,
+        inputs_embeds=None,
+        targets=None,
         num_loops=1000,
-        # position_ids=None,
         rm_pos_embd=False,
         add_inputs_embeds=False,
         output_intermediate=False,
@@ -111,14 +168,31 @@ class LoopedTransformer(nn.Module):
         # start = torch.cuda.Event(enable_timing=True)
         # end = torch.cuda.Event(enable_timing=True)
 
-        inputs_embeds = x
+        assert (inputs_idx is not None) ^ (
+            inputs_embeds is not None
+        ), "Either inputs_idx or inputs_embeds must be not None"
 
-        device = x.device
-        batch, seq_len, n_embd = x.shape
+        if inputs_idx is not None:
+            device = inputs_idx.device
+            batch, seq_len = inputs_idx.size()
+            assert (
+                seq_len <= self.config.block_size
+            ), f"Cannot forward sequence of length {seq_len}, block size is only {self.config.block_size}"
+            tok_emb = self.transformer.wte(inputs_idx)
+
+        if inputs_embeds is not None:
+            device = inputs_embeds.device
+            batch, seq_len, n_embd = inputs_embeds.shape
+            tok_emb = inputs_embeds
 
         # repeat register token
-        r = repeat(self.register_tokens, "n d -> b n d", b=batch)
-        x = torch.cat([r, x], dim=1)  # (batch, seq_len + n_reg_tokens, n_embd)
+        if self.register_tokens is not None:
+            r = repeat(self.register_tokens, "n d -> b n d", b=batch)
+            x = torch.cat(
+                [r, tok_emb], dim=1
+            )  # (batch, seq_len + n_reg_tokens, n_embd)
+        else:
+            x = tok_emb
 
         position_ids = torch.arange(
             0, seq_len + self.config.n_reg_tokens, dtype=torch.long, device=device
@@ -134,29 +208,36 @@ class LoopedTransformer(nn.Module):
 
         embeds = []
         for _ in range(num_loops):
-            # if add_inputs_embeds:
-            #    x = x + inputs_embeds
-            # else:
-            #    x = x
-
-            # forward the one loop
-
             num_block_layers = len(self.transformer.looped_block.layers)
             for t in range(len(num_block_layers)):
                 x = x + self.transformer.looped_block(x, t)
                 if add_inputs_embeds and t > 0 and t % len(num_block_layers) == 0:
                     x = x + inputs_embeds
-
             if output_intermediate:
                 embeds.append(x)
 
-        if output_intermediate:
-            return x, embeds
+        x = self.transformer.ln_f(x)
+        if targets is not None:
+            # if we are given some desired targets also calculate the loss
+            logits = self.lm_head(x)
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
+            )
+        else:
+            # inference-time mini-optimization: only forward the lm_head on the very last position
+            logits = self.lm_head(
+                x[:, [-1], :]
+            )  # note: using list [-1] to preserve the time dim
+            loss = None
 
         # end.record()
         # torch.cuda.synchronize()
         # print(f"elapsed time: {start.elapsed_time(end)} ms")
-        return x
+        # if output_intermediate:
+        #    return x, embeds
+        # return x
+
+        return logits, loss
 
     # https://github.com/AndyShih12/paradigms/blob/master/paradigms/stablediffusion_paradigms.py
     @torch.no_grad()
@@ -287,25 +368,24 @@ class LoopedTransformer(nn.Module):
 
 
 # %%
-config = LoopedConfig(n_layer=5, n_head=2, n_embd=24, bias=True)
+if __name__ == "__main__":
+    config = LoopedConfig(n_layer=5, n_head=2, n_embd=24, bias=True)
 
-model = LoopedTransformer(config)
-model = model.cuda()
-model.eval()
-batch_size = 1
-seq_len = 5
-inputs_embeds = torch.randn(batch_size, seq_len, config.n_embd).cuda()
-num_loops = 5000
+    model = LoopedTransformer(config)
+    model = model.cuda()
+    model.eval()
+    batch_size = 1
+    seq_len = 5
+    inputs_embeds = torch.randn(batch_size, seq_len, config.n_embd).cuda()
+    num_loops = 5000
 
-with torch.no_grad():
-    out = model(inputs_embeds, num_loops=num_loops)
-print("output of forward pass: ", out[0][0])
+    with torch.no_grad():
+        out = model(inputs_embeds, num_loops=num_loops)
+    print("output of forward pass: ", out[0][0])
 
-# paradigm forward
-out = model.paradigms_forward(
-    inputs_embeds, num_loops=num_loops, parallel=100, tolerance=0.1
-)
-print("output of paradigms forward pass: ", out[0][0])
-# num_loops = 5000, parallel=100, tolerance=0.1, pass_count=778!
-
-# %%
+    # paradigm forward
+    out = model.paradigms_forward(
+        inputs_embeds, num_loops=num_loops, parallel=100, tolerance=0.1
+    )
+    print("output of paradigms forward pass: ", out[0][0])
+    # num_loops = 5000, parallel=100, tolerance=0.1, pass_count=778!
