@@ -6,18 +6,8 @@ import torch
 import torch.nn as nn
 
 import torch.nn.functional as F
-from .nanogpt import MLP, CausalSelfAttention, LayerNorm
+from .nanogpt import MLP, CausalSelfAttention, LayerNorm, PreNormLayer
 from einops import repeat
-
-
-class LayerNormAndLayer(nn.Module):
-    def __init__(self, layer, n_embd, bias):
-        super(LayerNormAndLayer, self).__init__()
-        self.ln = LayerNorm(n_embd, bias=bias)
-        self.layer = layer
-
-    def forward(self, x):
-        return self.layer(self.ln(x))
 
 
 # Lie-Trotter splitting scheme with the Euler’s method
@@ -27,13 +17,9 @@ class TransformerBlock(nn.Module):
         self.layers = nn.ModuleList()
         for _ in range(config.n_layer):
             self.layers.append(
-                LayerNormAndLayer(
-                    CausalSelfAttention(config), config.n_embd, config.bias
-                )
+                PreNormLayer(CausalSelfAttention(config), config.n_embd, config.bias)
             )
-            self.layers.append(
-                LayerNormAndLayer(MLP(config), config.n_embd, config.bias)
-            )
+            self.layers.append(PreNormLayer(MLP(config), config.n_embd, config.bias))
 
     def forward(self, x: torch.Tensor, t: int):
         t = t % len(self.layers)
@@ -47,13 +33,9 @@ class KolmogorovBlock(nn.Module):
         super(TransformerBlock, self).__init__()
         self.layers = nn.ModuleList()
         for _ in range(config.n_layer):
+            self.layers.append(PreNormLayer(MLP(config), config.n_embd, config.bias))
             self.layers.append(
-                LayerNormAndLayer(MLP(config), config.n_embd, config.bias)
-            )
-            self.layers.append(
-                LayerNormAndLayer(
-                    CausalSelfAttention(config), config.n_embd, config.bias
-                )
+                PreNormLayer(CausalSelfAttention(config), config.n_embd, config.bias)
             )
 
     def forward(self, x: torch.Tensor, t: int):
@@ -68,17 +50,11 @@ class StrangMarchukBlock(nn.Module):
         super(TransformerBlock, self).__init__()
         self.layers = nn.ModuleList()
         for _ in range(config.n_layer):
+            self.layers.append(PreNormLayer(MLP(config), config.n_embd, config.bias))
             self.layers.append(
-                LayerNormAndLayer(MLP(config), config.n_embd, config.bias)
+                PreNormLayer(CausalSelfAttention(config), config.n_embd, config.bias)
             )
-            self.layers.append(
-                LayerNormAndLayer(
-                    CausalSelfAttention(config), config.n_embd, config.bias
-                )
-            )
-            self.layers.append(
-                LayerNormAndLayer(MLP(config), config.n_embd, config.bias)
-            )
+            self.layers.append(PreNormLayer(MLP(config), config.n_embd, config.bias))
 
     def forward(self, x: torch.Tensor, t: int):
         t = t % len(self.layers)
