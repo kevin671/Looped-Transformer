@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from .transformer_block import CausalSelfAttention, LayerNorm, MLP
+from transformer_block import CausalSelfAttention, LayerNorm, MLP
 
 
 class Block(nn.Module):
