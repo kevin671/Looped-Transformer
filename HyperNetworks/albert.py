@@ -1,11 +1,4 @@
-"""
-    Copyright 2019 Tae Hwan Jung
-    ALBERT Implementation with forking
-    Clean Pytorch Code from https://github.com/dhlee347/pytorchic-bert
-"""
-
-""" Transformer Model Classes & Config Class """
-
+# %%
 import math
 import json
 from typing import NamedTuple
@@ -15,21 +8,37 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from utils import split_last, merge_last
+
+def split_last(x, shape):
+    "split the last dimension to given shape"
+    shape = list(shape)
+    assert shape.count(-1) <= 1
+    if -1 in shape:
+        shape[shape.index(-1)] = int(x.size(-1) / -np.prod(shape))
+    return x.view(*x.size()[:-1], *shape)
+
+
+def merge_last(x, n_dims):
+    "merge the last n_dims to a dimension"
+    s = x.size()
+    assert n_dims > 1 and n_dims < len(s)
+    return x.view(*s[:-n_dims], -1)
 
 
 class Config(NamedTuple):
     "Configuration for BERT model"
-    vocab_size: int = None # Size of Vocabulary
-    hidden: int = 768 # Dimension of Hidden Layer in Transformer Encoder
-    hidden_ff: int = 768*4 # Dimension of Intermediate Layers in Positionwise Feedforward Net
-    embedding: int = 128 # Factorized embedding parameterization
+    vocab_size: int = None  # Size of Vocabulary
+    hidden: int = 768  # Dimension of Hidden Layer in Transformer Encoder
+    hidden_ff: int = (
+        768 * 4
+    )  # Dimension of Intermediate Layers in Positionwise Feedforward Net
+    embedding: int = 128  # Factorized embedding parameterization
 
-    n_layers: int = 12 # Numher of Hidden Layers
-    n_heads: int = 768//64 # Numher of Heads in Multi-Headed Attention Layers
-    #activ_fn: str = "gelu" # Non-linear Activation Function Type in Hidden Layers
-    max_len: int = 512 # Maximum Length for Positional Embeddings
-    n_segments: int = 2 # Number of Sentence Segments
+    n_layers: int = 12  # Numher of Hidden Layers
+    n_heads: int = 768 // 64  # Numher of Heads in Multi-Headed Attention Layers
+    # activ_fn: str = "gelu" # Non-linear Activation Function Type in Hidden Layers
+    max_len: int = 512  # Maximum Length for Positional Embeddings
+    n_segments: int = 2  # Number of Sentence Segments
 
     @classmethod
     def from_json(cls, file):
@@ -43,10 +52,11 @@ def gelu(x):
 
 class LayerNorm(nn.Module):
     "A layernorm module in the TF style (epsilon inside the square root)."
+
     def __init__(self, cfg, variance_epsilon=1e-12):
         super().__init__()
         self.gamma = nn.Parameter(torch.ones(cfg.hidden))
-        self.beta  = nn.Parameter(torch.zeros(cfg.hidden))
+        self.beta = nn.Parameter(torch.zeros(cfg.hidden))
         self.variance_epsilon = variance_epsilon
 
     def forward(self, x):
@@ -58,6 +68,7 @@ class LayerNorm(nn.Module):
 
 class Embeddings(nn.Module):
     "The embedding module from word, position and token_type embeddings."
+
     def __init__(self, cfg):
         super().__init__()
         # Original BERT Embedding
@@ -67,8 +78,10 @@ class Embeddings(nn.Module):
         self.tok_embed1 = nn.Embedding(cfg.vocab_size, cfg.embedding)
         self.tok_embed2 = nn.Linear(cfg.embedding, cfg.hidden)
 
-        self.pos_embed = nn.Embedding(cfg.max_len, cfg.hidden) # position embedding
-        self.seg_embed = nn.Embedding(cfg.n_segments, cfg.hidden) # segment(token type) embedding
+        self.pos_embed = nn.Embedding(cfg.max_len, cfg.hidden)  # position embedding
+        self.seg_embed = nn.Embedding(
+            cfg.n_segments, cfg.hidden
+        )  # segment(token type) embedding
 
         self.norm = LayerNorm(cfg)
         # self.drop = nn.Dropout(cfg.p_drop_hidden)
@@ -76,24 +89,26 @@ class Embeddings(nn.Module):
     def forward(self, x, seg):
         seq_len = x.size(1)
         pos = torch.arange(seq_len, dtype=torch.long, device=x.device)
-        pos = pos.unsqueeze(0).expand_as(x) # (S,) -> (B, S)
+        pos = pos.unsqueeze(0).expand_as(x)  # (S,) -> (B, S)
 
         # factorized embedding
         e = self.tok_embed1(x)
         e = self.tok_embed2(e)
         e = e + self.pos_embed(pos) + self.seg_embed(seg)
-        #return self.drop(self.norm(e))
+        # return self.drop(self.norm(e))
         return self.norm(e)
 
+
 class MultiHeadedSelfAttention(nn.Module):
-    """ Multi-Headed Dot Product Attention """
+    """Multi-Headed Dot Product Attention"""
+
     def __init__(self, cfg):
         super().__init__()
         self.proj_q = nn.Linear(cfg.hidden, cfg.hidden)
         self.proj_k = nn.Linear(cfg.hidden, cfg.hidden)
         self.proj_v = nn.Linear(cfg.hidden, cfg.hidden)
         # self.drop = nn.Dropout(cfg.p_drop_attn)
-        self.scores = None # for visualization
+        self.scores = None  # for visualization
         self.n_heads = cfg.n_heads
 
     def forward(self, x, mask):
@@ -104,14 +119,13 @@ class MultiHeadedSelfAttention(nn.Module):
         """
         # (B, S, D) -proj-> (B, S, D) -split-> (B, S, H, W) -trans-> (B, H, S, W)
         q, k, v = self.proj_q(x), self.proj_k(x), self.proj_v(x)
-        q, k, v = (split_last(x, (self.n_heads, -1)).transpose(1, 2)
-                   for x in [q, k, v])
+        q, k, v = (split_last(x, (self.n_heads, -1)).transpose(1, 2) for x in [q, k, v])
         # (B, H, S, W) @ (B, H, W, S) -> (B, H, S, S) -softmax-> (B, H, S, S)
         scores = q @ k.transpose(-2, -1) / np.sqrt(k.size(-1))
         if mask is not None:
             mask = mask[:, None, None, :].float()
             scores -= 10000.0 * (1.0 - mask)
-        #scores = self.drop(F.softmax(scores, dim=-1))
+        # scores = self.drop(F.softmax(scores, dim=-1))
         scores = F.softmax(scores, dim=-1)
         # (B, H, S, S) @ (B, H, S, W) -> (B, H, S, W) -trans-> (B, S, H, W)
         h = (scores @ v).transpose(1, 2).contiguous()
@@ -122,12 +136,13 @@ class MultiHeadedSelfAttention(nn.Module):
 
 
 class PositionWiseFeedForward(nn.Module):
-    """ FeedForward Neural Networks for each position """
+    """FeedForward Neural Networks for each position"""
+
     def __init__(self, cfg):
         super().__init__()
         self.fc1 = nn.Linear(cfg.hidden, cfg.hidden_ff)
         self.fc2 = nn.Linear(cfg.hidden_ff, cfg.hidden)
-        #self.activ = lambda x: activ_fn(cfg.activ_fn, x)
+        # self.activ = lambda x: activ_fn(cfg.activ_fn, x)
 
     def forward(self, x):
         # (B, S, D) -> (B, S, D_ff) -> (B, S, D)
@@ -153,7 +168,8 @@ class PositionWiseFeedForward(nn.Module):
 
 
 class Transformer(nn.Module):
-    """ Transformer with Self-Attentive Blocks"""
+    """Transformer with Self-Attentive Blocks"""
+
     def __init__(self, cfg):
         super().__init__()
         self.embed = Embeddings(cfg)
@@ -180,3 +196,10 @@ class Transformer(nn.Module):
 
         return h
 
+
+# %%
+model = Transformer(Config())
+x = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+
+# %%
