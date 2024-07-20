@@ -1,1 +1,6 @@
 __pycache__
+.ignore
+data
+*.out
+*.path
+.d00*
