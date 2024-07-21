@@ -20,7 +20,6 @@ class TemplateBank(nn.Module):
         self.templates = nn.Parameter(torch.stack(templates))
 
     def forward(self, coefficients):
-        print(f"{self.templates.size()}")
         # print(coefficients.size()) # torch.Size([4, 1, 1, 1, 1])
         # print(f"{(self.templates * coefficients).shape}")
         return (self.templates * coefficients).sum(0)

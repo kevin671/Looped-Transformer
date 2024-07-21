@@ -8,7 +8,7 @@
 source /work/gg45/g45004/.bashrc
 conda activate loop_tf
 
-export WANDB_CONFIG_DIR="/work/gg45/g45004/looped_transformer/tmp"
+export WANDB_CONFIG_DIR="/work/gg45/g45004/Looped-Transformer/looped_transformer/tmp"
 export WANDB_API_KEY="f1462e37dc61bbcaa335f10a8dd966bbaec5423a"
 
 n_gpu=0

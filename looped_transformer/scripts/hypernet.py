@@ -133,14 +133,8 @@ class Block(nn.Module):
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-        # self.time_embd = nn.Embedding(100, 1)
-        self.qkv_weight = nn.Parameter(torch.randn(3 * config.n_embd, config.n_embd))
-        nn.init.kaiming_normal_(self.qkv_weight)
-
-    def forward(self, x):  # t):
-        # t_embd = self.time_embd(t)
-        # qkv_weight
-        x = x + self.attn(self.ln_1(x), qkv_weight=self.qkv_weight)
+    def forward(self, x, qkv_weight):
+        x = x + self.attn(self.ln_1(x), qkv_weight=qkv_weight)
         x = x + self.mlp(self.ln_2(x))
         return x
 
@@ -176,6 +170,15 @@ class GPT2Model(nn.Module):
                 ln_f=LayerNorm(config.n_embd, bias=config.bias),
             )
         )
+
+        max_loops = 100
+        t_embd_dim = 128
+        self.t_embd = nn.Embedding(max_loops, t_embd_dim)
+        # self.qkv_weight = nn.Parameter(torch.randn(3 * config.n_embd, config.n_embd))
+        # nn.init.kaiming_normal_(self.qkv_weight)
+        hidden_dim = 284
+        self.hyper_fc1 = nn.Linear(t_embd_dim, hidden_dim)
+        self.hyper_fc2 = nn.Linear(hidden_dim, config.n_embd * 3 * config.n_embd)
 
         # init all weights
         self.apply(self._init_weights)
@@ -220,6 +223,7 @@ class GPT2Model(nn.Module):
         rm_pos_embd=False,
         add_inputs_embeds=False,
         output_intermediate=False,
+        t_idx=0,
     ):
         device = inputs_embeds.device
         b, t, d = inputs_embeds.size()
@@ -243,11 +247,17 @@ class GPT2Model(nn.Module):
         if rm_pos_embd:
             pos_emb = torch.zeros_like(pos_emb, device=device)
         x = self.transformer.drop(inputs_embeds + pos_emb)
+
+        t_embd = self.t_embd(torch.tensor(t_idx, device=device))
+        qkv_weight = self.hyper_fc2(new_gelu(self.hyper_fc1(t_embd))).view(
+            3 * self.config.n_embd, self.config.n_embd
+        )
+
         for block in self.transformer.h:
             if add_inputs_embeds:
-                x = block(x + inputs_embeds)
+                x = block(x + inputs_embeds, qkv_weight=qkv_weight)
             else:
-                x = block(x)
+                x = block(x, qkv_weight=qkv_weight)
             if output_intermediate:
                 embeds.append(x)
         x = self.transformer.ln_f(x)

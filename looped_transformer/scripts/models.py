@@ -100,7 +100,7 @@ class TransformerModel(nn.Module):
 
         return zs
 
-    def forward(self, xs, ys, add_inputs_embeds=False):
+    def forward(self, xs, ys, t_idx, add_inputs_embeds=False):
         """
         :param xs: [B, n, d]
         :param ys: [B, n]
@@ -116,6 +116,7 @@ class TransformerModel(nn.Module):
             position_ids=None,
             rm_pos_embd=False,
             add_inputs_embeds=add_inputs_embeds,
+            t_idx=t_idx,
         )  # [B, 2n, d]
         prediction = self._read_out(f_output)  # [B, 2n, d] -> [B, 2n, 1]
         if self._pred_type == "regression":
@@ -175,16 +176,22 @@ class TransformerModelLooped(TransformerModel):
         pred_type="regression",
     ):
 
+        print("n_dims: ", n_dims, "n_positions: ", n_positions, "n_embd: ", n_embd)
+
         super(TransformerModelLooped, self).__init__(
             n_dims, n_positions, n_embd, n_layer, n_head, pred_type
         )
         self.loop_func = loop_func
 
-    def f(self, output, embeds):
+    def f(self, output, embeds, t_idx):
         if self.loop_func == "z=f(x+z)":
-            f_output = self._backbone(inputs_embeds=output + embeds)  # [B, 2n + 1, d]
+            f_output = self._backbone(
+                inputs_embeds=output + embeds, t_idx=t_idx
+            )  # [B, 2n + 1, d]
         elif self.loop_func == "z=f(x*z)":
-            f_output = self._backbone(inputs_embeds=output * embeds)  # [B, 2n + 1, d]
+            f_output = self._backbone(
+                inputs_embeds=output * embeds, t_idx=t_idx
+            )  # [B, 2n + 1, d]
         else:
             raise NotImplementedError
         return f_output
@@ -214,9 +221,9 @@ class TransformerModelLooped(TransformerModel):
         for idx in range(n_loops):
             if idx < n_loop_start:  # this will save memory when n_loops large.
                 with torch.no_grad():
-                    output = self.f(output, embeds)
+                    output = self.f(output, embeds, idx)
             else:
-                output = self.f(output, embeds)
+                output = self.f(output, embeds, idx)
                 prediction = self._read_out(output)  # [B, 2n, d] -> [B, 2n, 1]
                 if self._pred_type == "regression":
                     y = prediction[:, self.ind :: self.freq, 0]
@@ -231,15 +238,27 @@ class TransformerModelLooped(TransformerModel):
 
 # %%
 if __name__ == "__main__":
-    n_dims = 12
+    n_dims = 20
+    n_positions = 101
+    n_embd = 256
+    n_head = 8
+    T = 500
+    n_layer = 1
     model = TransformerModelLooped(
         n_dims=n_dims,
-        n_positions=10,
-        n_embd=128,
-        n_layer=12,
-        n_head=4,
-        loop_func="z=f(x+z)",
-        pred_type="regression",
+        n_positions=n_positions,
+        n_embd=n_embd,
+        n_layer=n_layer,
+        n_head=n_head,
+    )
+
+    # cpu
+    model.load_state_dict(
+        torch.load(
+            "/work/gg45/g45004/Looped-Transformer/looped_transformer/results2/linear_regression_loop/0721152049-LR_loop_L1_ends{30}_T{15}-0668/state.pt",
+            map_location="cpu",
+        )["model_state_dict"],
+        strict=True,
     )
 
     xs = torch.randn(2, 10, n_dims)

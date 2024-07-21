@@ -114,7 +114,7 @@ elif args.net == "hypernet_vit":
         # hypernet_hidden_dim=512,
     )
     print("depth: ", depth)
-elif args.net == "swrn":
+elif args.net == "cnn":
     net = swrn(28, 10, 6)
 
 net.cuda()
