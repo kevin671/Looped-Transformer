@@ -1,14 +1,3 @@
-"""
-Full definition of a GPT Language Model, all of it in this single file.
-References:
-1) the official GPT-2 TensorFlow implementation released by OpenAI:
-https://github.com/openai/gpt-2/blob/master/src/model.py
-2) huggingface/transformers PyTorch implementation:
-https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
-
-Reference Nano-GPT: https://github.com/karpathy/nanoGPT/blob/master/model.py
-"""
-
 import math
 from dataclasses import dataclass
 
@@ -51,7 +40,8 @@ class CausalSelfAttention(nn.Module):
         super().__init__()
         assert config.n_embd % config.n_head == 0
         # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        # self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        # self.qkv_weight = nn.Parameter(torch.randn(3 * config.n_embd, config.n_embd))
         # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         # regularization
@@ -76,13 +66,17 @@ class CausalSelfAttention(nn.Module):
                 ),
             )
 
-    def forward(self, x, cross_input=None, attn_mask=None):
+    def forward(self, x, qkv_weight, cross_input=None, attn_mask=None):
         B, T, C = (
             x.size()
         )  # batch size, sequence length, embedding dimensionality (n_embd)
 
+        # qkv_weight = self.c_attn(x)
+        qkv_weight = x @ qkv_weight.t()
+        # print(qkv_weight.shape)
+
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
+        q, k, v = qkv_weight.split(self.n_embd, dim=2)
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(
             1, 2
         )  # (B, nh, T, hs)
@@ -139,8 +133,14 @@ class Block(nn.Module):
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
+        # self.time_embd = nn.Embedding(100, 1)
+        self.qkv_weight = nn.Parameter(torch.randn(3 * config.n_embd, config.n_embd))
+        nn.init.kaiming_normal_(self.qkv_weight)
+
+    def forward(self, x):  # t):
+        # t_embd = self.time_embd(t)
+        # qkv_weight
+        x = x + self.attn(self.ln_1(x), qkv_weight=self.qkv_weight)
         x = x + self.mlp(self.ln_2(x))
         return x
 

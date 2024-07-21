@@ -1,8 +1,13 @@
+# %%
 import torch
 import torch.nn as nn
-from nano_gpt import GPT2Model, GPT2Config, LayerNorm
+
+# from nano_gpt import GPT2Model, GPT2Config
+
+from hypernet import GPT2Model, GPT2Config
 
 MAX_NUM_CLASS = 2  # for openML classification task
+
 
 def build_model(conf):
     if conf.family == "gpt2":
@@ -14,7 +19,7 @@ def build_model(conf):
             n_head=conf.n_head,
             pred_type=conf.pred_type,
         )
-    elif conf.family == 'gpt2_loop':
+    elif conf.family == "gpt2_loop":
         model = TransformerModelLooped(
             n_dims=conf.n_dims,
             n_positions=conf.n_positions,
@@ -24,7 +29,7 @@ def build_model(conf):
             loop_func=conf.loop_func,
             pred_type=conf.pred_type,
         )
-    elif conf.family == 'gpt2_tying':
+    elif conf.family == "gpt2_tying":
         model = TransformerModelTying(
             n_dims=conf.n_dims,
             n_positions=conf.n_positions,
@@ -39,7 +44,15 @@ def build_model(conf):
 
 
 class TransformerModel(nn.Module):
-    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4, pred_type='regression'):
+    def __init__(
+        self,
+        n_dims,
+        n_positions,
+        n_embd=128,
+        n_layer=12,
+        n_head=4,
+        pred_type="regression",
+    ):
 
         super(TransformerModel, self).__init__()
         self.freq = 2
@@ -51,7 +64,7 @@ class TransformerModel(nn.Module):
         configuration.n_embd = n_embd
         configuration.dropout = 0.0
         configuration.bias = True
-        configuration.dropout = 0.
+        configuration.dropout = 0.0
         self.configuration = configuration
 
         self.n_positions = n_positions  # n = points in this setting
@@ -62,30 +75,26 @@ class TransformerModel(nn.Module):
 
         self._read_in = nn.Linear(n_dims, n_embd)
         self._backbone = GPT2Model(self.configuration)
-        if self._pred_type == 'regression':
+        if self._pred_type == "regression":
             self._read_out = nn.Linear(n_embd, 1)
-        elif self._pred_type == 'classification':
+        elif self._pred_type == "classification":
             self._read_out = nn.Linear(n_embd, MAX_NUM_CLASS)  # NOTE: hard-code
-
-        self.print_flag = False
 
     def _combine(self, xs_b, ys_b):
         """
         :param xs_b: shape [B, n, d_in]
         :param ys_b: shape [B, n]
-        :return: shape [B, 2n, d_in + 1]
+        :return: shape [B, 2n, d_in]
         """
         B, n, d = xs_b.shape
         device = xs_b.device
-
         ys_b_wide = torch.cat(
             (
                 ys_b.view(B, n, 1),
-                torch.zeros(B, n, d-1, device=device),
+                torch.zeros(B, n, d - 1, device=device),
             ),
             axis=2,
         )
-
         zs = torch.stack((xs_b, ys_b_wide), dim=2)
         zs = zs.view(B, self.freq * n, d)
 
@@ -103,12 +112,16 @@ class TransformerModel(nn.Module):
         embeds = self._read_in(zs)  # [B, 2n, d_in + 1] -> [B, 2n, d]
 
         f_output = self._backbone(
-            inputs_embeds=embeds, position_ids=None, rm_pos_embd=False, add_inputs_embeds=add_inputs_embeds)  # [B, 2n, d]
+            inputs_embeds=embeds,
+            position_ids=None,
+            rm_pos_embd=False,
+            add_inputs_embeds=add_inputs_embeds,
+        )  # [B, 2n, d]
         prediction = self._read_out(f_output)  # [B, 2n, d] -> [B, 2n, 1]
-        if self._pred_type == 'regression':
-            y = prediction[:, self.ind::self.freq, 0]
-        elif self._pred_type == 'classification':
-            y = prediction[:, self.ind::self.freq]
+        if self._pred_type == "regression":
+            y = prediction[:, self.ind :: self.freq, 0]
+        elif self._pred_type == "classification":
+            y = prediction[:, self.ind :: self.freq]
         else:
             raise NotImplementedError
 
@@ -119,13 +132,12 @@ class TransformerModelTying(TransformerModel):
     def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4):
 
         super(TransformerModelTying, self).__init__(
-            n_dims, n_positions, n_embd, n_layer, n_head)
+            n_dims, n_positions, n_embd, n_layer, n_head
+        )
 
         self.configuration.n_layer = 1
 
         self._backbone = GPT2Model(self.configuration)
-
-        self.print_flag = False
 
     def f(self, output):
         f_output = self._backbone(inputs_embeds=output)  # [B, 2n + 1, d]
@@ -146,23 +158,32 @@ class TransformerModelTying(TransformerModel):
         for idx in range(self.n_layer):
             output = self.f(output)
         prediction = self._read_out(output)  # [B, 2n, d] -> [B, 2n, 1]
-        y = prediction[:, self.ind::self.freq, 0]  # [B, n]
+        y = prediction[:, self.ind :: self.freq, 0]  # [B, n]
 
         return y
 
 
 class TransformerModelLooped(TransformerModel):
     def __init__(
-            self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4, loop_func='z=f(x+z)', pred_type='regression'):
+        self,
+        n_dims,
+        n_positions,
+        n_embd=128,
+        n_layer=12,
+        n_head=4,
+        loop_func="z=f(x+z)",
+        pred_type="regression",
+    ):
 
         super(TransformerModelLooped, self).__init__(
-            n_dims, n_positions, n_embd, n_layer, n_head, pred_type)
+            n_dims, n_positions, n_embd, n_layer, n_head, pred_type
+        )
         self.loop_func = loop_func
 
     def f(self, output, embeds):
-        if self.loop_func == 'z=f(x+z)':
+        if self.loop_func == "z=f(x+z)":
             f_output = self._backbone(inputs_embeds=output + embeds)  # [B, 2n + 1, d]
-        elif self.loop_func == 'z=f(x*z)':
+        elif self.loop_func == "z=f(x*z)":
             f_output = self._backbone(inputs_embeds=output * embeds)  # [B, 2n + 1, d]
         else:
             raise NotImplementedError
@@ -177,14 +198,17 @@ class TransformerModelLooped(TransformerModel):
         :return:
         """
         B, n, d_in = xs.shape
-        zs = self._combine(xs, ys)  # [B, n, d_in], [B, n], [B, n] -> [B, 2n, d_in + 1]
-        embeds = self._read_in(zs)  # [B, 2n, d_in + 1] -> [B, 2n, d]
-        if self.loop_func in ['z=f(x+z)']:
+        zs = self._combine(xs, ys)  # [B, n, d_in], [B, n], [B, n] -> [B, 2n, d_in]
+        embeds = self._read_in(zs)  # [B, 2n, d_in] -> [B, 2n, d]
+
+        if self.loop_func in ["z=f(x+z)"]:
             output = torch.zeros_like(embeds)  # also of shape [B, 2n, d]
-        elif self.loop_func in ['z=f(x*z)']:
+        elif self.loop_func in ["z=f(x*z)"]:
             output = torch.ones_like(embeds)  # also of shape [B, 2n, d]
         else:
-            raise NotImplementedError("Currently we only support loop function z=f(x+z) or z=f(x*z).")
+            raise NotImplementedError(
+                "Currently we only support loop function z=f(x+z) or z=f(x*z)."
+            )
 
         pred_list = []
         for idx in range(n_loops):
@@ -194,15 +218,33 @@ class TransformerModelLooped(TransformerModel):
             else:
                 output = self.f(output, embeds)
                 prediction = self._read_out(output)  # [B, 2n, d] -> [B, 2n, 1]
-                if self._pred_type == 'regression':
-                    y = prediction[:, self.ind::self.freq, 0]
-                elif self._pred_type == 'classification':
-                    y = prediction[:, self.ind::self.freq]
+                if self._pred_type == "regression":
+                    y = prediction[:, self.ind :: self.freq, 0]
+                elif self._pred_type == "classification":
+                    y = prediction[:, self.ind :: self.freq]
                 else:
                     raise NotImplementedError
                 pred_list.append(y)
-            if not self.print_flag:
-                print(idx)
-                self.print_flag = True
 
         return pred_list
+
+
+# %%
+if __name__ == "__main__":
+    n_dims = 12
+    model = TransformerModelLooped(
+        n_dims=n_dims,
+        n_positions=10,
+        n_embd=128,
+        n_layer=12,
+        n_head=4,
+        loop_func="z=f(x+z)",
+        pred_type="regression",
+    )
+
+    xs = torch.randn(2, 10, n_dims)
+    ys = torch.randint(0, 2, (2, 10))
+
+    pred_list = model(xs, ys, n_loop_start=0, n_loops=12)
+    print(pred_list[-1].shape)
+# %%
