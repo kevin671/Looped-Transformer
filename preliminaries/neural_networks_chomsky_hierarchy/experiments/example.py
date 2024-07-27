@@ -1,0 +1,218 @@
+# Copyright 2024 DeepMind Technologies Limited
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+"""Example script to train and evaluate a network."""
+
+from absl import app
+from absl import flags
+import haiku as hk
+import jax.numpy as jnp
+import numpy as np
+
+from neural_networks_chomsky_hierarchy.experiments import constants
+from neural_networks_chomsky_hierarchy.experiments import curriculum as curriculum_lib
+from neural_networks_chomsky_hierarchy.experiments import training
+from neural_networks_chomsky_hierarchy.experiments import utils
+
+_BATCH_SIZE = flags.DEFINE_integer(
+    "batch_size",
+    default=128,
+    help="Training batch size.",
+    lower_bound=1,
+)
+_SEQUENCE_LENGTH = flags.DEFINE_integer(
+    "sequence_length",
+    default=40,
+    help="Maximum training sequence length.",
+    lower_bound=1,
+)
+_TASK = flags.DEFINE_string(
+    "task",
+    default="even_pairs",
+    help="Length generalization task (see `constants.py` for other tasks).",
+)
+_ARCHITECTURE = flags.DEFINE_string(
+    "architecture",
+    default="looped_transformer_encoder",  # "tape_rnn", "looped_transformer", "transformer_encoder
+    help="Model architecture (see `constants.py` for other architectures).",
+)
+
+_IS_AUTOREGRESSIVE = flags.DEFINE_boolean(
+    "is_autoregressive",
+    default=False,
+    help="Whether to use autoregressive sampling or not.",
+)
+_COMPUTATION_STEPS_MULT = flags.DEFINE_integer(
+    "computation_steps_mult",
+    default=0,
+    help=(
+        "The amount of computation tokens to append to the input tape (defined"
+        " as a multiple of the input length)"
+    ),
+    lower_bound=0,
+)
+# The architecture parameters depend on the architecture, so we cannot define
+# them as via flags. See `constants.py` for the required values.
+_ARCHITECTURE_PARAMS = {
+    # "hidden_size": 256,
+    # "memory_cell_size": 8,
+    # "memory_size": 40,
+    "embedding_dim": 64,
+    "num_layers": 5,  # 5,
+}
+
+TASK_LEVELS = {
+    "modular_arithmetic": "regular",
+    "parity_check": "regular",
+    "even_pairs": "regular",
+    "cycle_navigation": "regular",
+    "modular_arithmetic_brackets": "dcf",
+    "reverse_string": "dcf",
+    "stack_manipulation": "dcf",
+    "solve_equation": "dcf",
+    "missing_duplicate_string": "cs",
+    "compute_sqrt": "cs",
+    "duplicate_string": "cs",
+    "binary_addition": "cs",
+    "binary_multiplication": "cs",
+    "odds_first": "cs",
+    "bucket_sort": "cs",
+}
+
+REGULAR_TASKS = [
+    # "modular_arithmetic",
+    "parity_check",
+    "even_pairs",
+    "cycle_navigation",
+]
+
+DCF_TASKS = [
+    "modular_arithmetic_brackets",
+    #"reverse_string",
+    #"stack_manipulation",
+    # "solve_equation",
+]
+
+CS_TASKS = [
+    "missing_duplicate_string",
+    "compute_sqrt",
+    "duplicate_string",
+    "binary_addition",
+    "binary_multiplication",
+    "odds_first",
+    "bucket_sort",
+]
+
+_TASK_LEVEL = flags.DEFINE_string(
+    "task_level",
+    default="dcf",
+    help="Task level (regular, dcf, cs).",
+)
+
+
+def main(unused_argv) -> None:
+
+    if _TASK_LEVEL.value == "regular":
+        tasks = REGULAR_TASKS
+    elif _TASK_LEVEL.value == "dcf":
+        tasks = DCF_TASKS
+    elif _TASK_LEVEL.value == "cs":
+        tasks = CS_TASKS
+    else:
+        tasks = [_TASK.value]
+
+    for task_name in tasks:
+        # Create the task.
+        # curriculum = curriculum_lib.UniformCurriculum(
+        #    values=list(range(1, _SEQUENCE_LENGTH.value + 1))
+        # )
+        curriculum = curriculum_lib.FixedCurriculum(
+            sequence_length=_SEQUENCE_LENGTH.value
+        )
+        # task = constants.TASK_BUILDERS[_TASK.value]()
+        task = constants.TASK_BUILDERS[task_name]()
+
+        # Create the model.
+        single_output = task.output_length(10) == 1
+        model = constants.MODEL_BUILDERS[_ARCHITECTURE.value](
+            output_size=task.output_size,
+            return_all_outputs=True,
+            **_ARCHITECTURE_PARAMS,
+        )
+        if _IS_AUTOREGRESSIVE.value:
+            if "transformer" not in _ARCHITECTURE.value:
+                model = utils.make_model_with_targets_as_input(
+                    model, _COMPUTATION_STEPS_MULT.value
+                )
+            model = utils.add_sampling_to_autoregressive_model(model, single_output)
+        else:
+            model = utils.make_model_with_empty_targets(
+                model, task, _COMPUTATION_STEPS_MULT.value, single_output
+            )
+        model = hk.transform(model)
+
+        # Create the loss and accuracy based on the pointwise ones.
+        def loss_fn(output, target):
+            loss = jnp.mean(jnp.sum(task.pointwise_loss_fn(output, target), axis=-1))
+            return loss, {}
+
+        def accuracy_fn(output, target):
+            mask = task.accuracy_mask(target)
+            return jnp.sum(mask * task.accuracy_fn(output, target)) / jnp.sum(mask)
+
+        # Create the final training parameters.
+        training_params = training.ClassicTrainingParams(
+            seed=0,
+            model_init_seed=0,
+            training_steps=1_000_000,  # 1000000,10_000
+            log_frequency=100,
+            length_curriculum=curriculum,
+            batch_size=_BATCH_SIZE.value,
+            task=task,
+            model=model,
+            loss_fn=loss_fn,
+            learning_rate=1e-3,  # 0.0005,
+            accuracy_fn=accuracy_fn,
+            compute_full_range_test=True,
+            max_range_test_length=_SEQUENCE_LENGTH.value,
+            range_test_total_batch_size=512,
+            range_test_sub_batch_size=64,
+            is_autoregressive=_IS_AUTOREGRESSIVE.value,
+        )
+
+        # print params
+        print(f"seed: {training_params.seed}")
+        print(f"model_init_seed: {training_params.model_init_seed}")
+        print(f"log_frequency: {training_params.log_frequency}")
+        print(f"training_steps: {training_params.training_steps}")
+        print(f"batch_size: {training_params.batch_size}")
+        print(f"learning_rate: {training_params.learning_rate}")
+        print(f"task: {task_name}")
+        print(f"model: {_ARCHITECTURE.value}")
+        print(f"is_autoregressive: {_IS_AUTOREGRESSIVE.value}")
+
+        training_worker = training.TrainingWorker(training_params, use_tqdm=True)
+        _, eval_results, _ = training_worker.run()
+
+        # Gather results and print final score.
+        accuracies = [r["accuracy"] for r in eval_results]
+        # score = np.mean(accuracies[_SEQUENCE_LENGTH.value + 1 :])
+        score = np.mean(accuracies[: _SEQUENCE_LENGTH.value + 1])
+        # print(f"Network score: {score}")
+        print(f"Task: {task_name}, Network score: {score}")
+
+
+if __name__ == "__main__":
+    app.run(main)

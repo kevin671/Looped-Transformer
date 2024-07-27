@@ -252,7 +252,6 @@ if __name__ == "__main__":
         n_head=n_head,
     )
 
-    # cpu
     model.load_state_dict(
         torch.load(
             "/work/gg45/g45004/Looped-Transformer/looped_transformer/results2/linear_regression_loop/0721152049-LR_loop_L1_ends{30}_T{15}-0668/state.pt",
@@ -265,5 +264,5 @@ if __name__ == "__main__":
     ys = torch.randint(0, 2, (2, 10))
 
     pred_list = model(xs, ys, n_loop_start=0, n_loops=12)
-    print(pred_list[-1].shape)
+    print(f"{pred_list[-1].shape=}")
 # %%

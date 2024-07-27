@@ -7,4 +7,4 @@
 
 source /work/gg45/g45004/.bashrc
 
-python train.py --net vit
+python train.py --net hypernet_vit

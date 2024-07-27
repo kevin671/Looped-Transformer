@@ -1,3 +1,4 @@
+# %%
 import math
 from dataclasses import dataclass
 
@@ -249,9 +250,12 @@ class GPT2Model(nn.Module):
         x = self.transformer.drop(inputs_embeds + pos_emb)
 
         t_embd = self.t_embd(torch.tensor(t_idx, device=device))
+        # print(f"{t_embd[:5]=}")
+
         qkv_weight = self.hyper_fc2(new_gelu(self.hyper_fc1(t_embd))).view(
             3 * self.config.n_embd, self.config.n_embd
         )
+        print(f"{qkv_weight[0, :5]=}")
 
         for block in self.transformer.h:
             if add_inputs_embeds:

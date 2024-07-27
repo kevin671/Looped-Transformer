@@ -115,16 +115,17 @@ class Transformer(nn.Module):
 
         self.time_embedding = nn.Embedding(depth, time_embed_dim)
 
-        # hidden_dim = 256
-        # self.hyper_fc1 = nn.Linear(time_embed_dim, hidden_dim)
-        # self.hyper_fc2 = nn.Linear(hidden_dim, dim * dim_head * heads * 3)
+        hidden_dim = 256
+        self.hyper_fc1 = nn.Linear(time_embed_dim, hidden_dim)
+        self.hyper_fc2 = nn.Linear(hidden_dim, dim * dim_head * heads * 3)
 
     def forward(self, x):
         for t, (attn, ff) in enumerate(self.layers):
             t_embed = self.time_embedding(torch.tensor(t).to(x.device))
-            qkv_weight = F.linear(t_embed, self.qkv_weight.t())
-            # qkv_weight = self.hyper_fc2(F.relu(self.hyper_fc1(t_embed)))
+            # qkv_weight = F.linear(t_embed, self.qkv_weight.t())
+            qkv_weight = self.hyper_fc2(F.relu(self.hyper_fc1(t_embed)))
             qkv_weight = qkv_weight.reshape(self.dim_head * self.heads * 3, self.dim)
+            # print(f"{qkv_weight[0][:10]=}")
             x = attn(x, qkv_weight) + x
             x = ff(x) + x
         return x
@@ -203,17 +204,18 @@ class ViT(nn.Module):
 if __name__ == "__main__":
     input = torch.randn(5, 3, 32, 32)
     model = ViT(
-        # model = ViT(
         image_size=32,
         patch_size=4,
         num_classes=10,
-        dim=192,
+        dim=512,
         depth=6,
         heads=8,
-        mlp_dim=192,
+        mlp_dim=512,
         dropout=0.1,
         emb_dropout=0.1,
-        # hypernet_hidden_dim=256,
+    )
+    model.load_state_dict(
+        torch.load("hypernetworks.pth", map_location=torch.device("cpu"))["net"]
     )
     output = model(input)
     print(output.shape)

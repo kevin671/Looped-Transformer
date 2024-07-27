@@ -72,7 +72,7 @@ parser.add_argument(
     "--resume", "-r", action="store_true", help="resume from checkpoint"
 )
 parser.add_argument(
-    "--n_epochs", default=200, type=int, help="number of epochs to train"
+    "--n_epochs", default=2000, type=int, help="number of epochs to train"
 )
 args = parser.parse_args()
 
@@ -123,7 +123,7 @@ total_params = sum(p.numel() for p in net.parameters() if p.requires_grad)
 M = 1024**2
 print(f"Total Trainable Params: {total_params / M:.2f}M")
 
-learning_rate = 1e-3
+learning_rate = 1e-4
 weight_decay = 0.0005
 milestones = [168000, 336000, 400000, 450000, 550000, 600000]
 max_iter = 1000000
@@ -183,11 +183,11 @@ while epochs < args.n_epochs:
     accuracy = (100.0 * correct) / total
     print("After epoch %d, accuracy: %.4f %%" % (epochs, accuracy))
 
-    # if accuracy > best_accuracy:
-    #    print("Saving model...")
-    #    state = {"net": net.state_dict(), "acc": accuracy}
-    #    torch.save(state, "./hypernetworks_cifar_paper.pth")
-    #    best_accuracy = accuracy
+    if accuracy > best_accuracy:
+        print("Saving model...")
+        state = {"net": net.state_dict(), "acc": accuracy}
+        torch.save(state, "./hypernetworks.pth")
+        best_accuracy = accuracy
 
 print("Finished Training")
 
