@@ -3,59 +3,21 @@ import math
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
-from transformer_block import MLP, CausalSelfAttention, LayerNorm, PreNormLayer
+from looped_tf_block import MLP, MultiheadAttention, LayerNorm, PreNormLayer
 from einops import repeat
 
-from scheme import Scheme, LieTrotterSplittingScheme, StrangMarchukSplittingScheme
-
-
-# Lie-Trotter splitting scheme with the Euler’s method
-class TransformerBlock(nn.Module):
-    def __init__(self, config):
-        super(TransformerBlock, self).__init__()
-        self.layers = nn.ModuleList()
-        for _ in range(config.n_layer):
-            self.layers.append(
-                PreNormLayer(
-                    CausalSelfAttention(config), config.hidden_dim, config.bias
-                )
-            )
-            self.layers.append(
-                PreNormLayer(MLP(config), config.hidden_dim, config.bias)
-            )
-
-    def forward(self, x: torch.Tensor, t: int):
-        t = t % len(self.layers)
-        layer = self.layers[t]
-        return layer(x)
-
-
-def timestep_embedding(timesteps, dim, max_period=10000):
-    """
-    Create sinusoidal timestep embeddings.
-
-    :param timesteps: a 1-D Tensor of N indices, one per batch element.
-                      These may be fractional.
-    :param dim: the dimension of the output.
-    :param max_period: controls the minimum frequency of the embeddings.
-    :return: an [N x dim] Tensor of positional embeddings.
-    """
-    half = dim // 2
-    freqs = torch.exp(
-        -math.log(max_period)
-        * torch.arange(start=0, end=half, dtype=torch.float32)
-        / half
-    ).to(device=timesteps.device)
-    args = timesteps[:, None].float() * freqs[None]
-    embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
-    if dim % 2:
-        embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
-    return embedding
+from scheme import (
+    Scheme,
+    LieTrotterSplittingScheme,
+    StrangMarchukSplittingScheme,
+    build_scheme,
+)
 
 
 @dataclass
 class LoopedConfig:
-    sheme: Scheme = Scheme.LIE_TROTTER
+    sheme: Scheme = Scheme.LIE_TROTTER  # STRANG_MARCHUK
+    picard_sheme: Scheme = Scheme.TROTTER_ADDITIVE  # STRANG_ADDITIV
     use_time_embed: bool = True
     block_size: int = 128
     vocab_size: int = 1024
@@ -65,6 +27,9 @@ class LoopedConfig:
     n_reg_tokens: int = 0
     bias: bool = True
     dropout: float = 0.0
+    hidden_t_dim: int = 16
+    hypernet_hidden_dim: int = 64
+    step_size: float = 0.1
 
 
 class LoopedTransformer(nn.Module):
@@ -94,7 +59,7 @@ class LoopedTransformer(nn.Module):
                 drop=nn.Dropout(config.dropout),
                 mlp=PreNormLayer(MLP(config), config.hidden_dim, config.bias),
                 attn=PreNormLayer(
-                    CausalSelfAttention(config),
+                    MultiheadAttention(config),
                     config.hidden_dim,
                     config.bias,
                 ),
@@ -119,10 +84,15 @@ class LoopedTransformer(nn.Module):
         else:
             self.register_tokens = None  # Optionally set to None or skip entirely
 
-        self.solver = StrangMarchukSplittingScheme(self.transformer)
+        self.solver = (
+            StrangMarchukSplittingScheme(self.transformer, config)
+            if config.sheme == Scheme.STRANG_MARCHUK
+            else LieTrotterSplittingScheme(self.transformer, config)
+        )
         # LieTrotterSplittingScheme(self.transformer)
 
-        # report number of parameters
+        self.picard_solver = build_scheme(config.picard_sheme, self.transformer, config)
+
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
 
     def get_num_params(self, non_embedding=True):
@@ -191,23 +161,13 @@ class LoopedTransformer(nn.Module):
 
         # print(f"{x.shape=}")
 
-        # This is for one layer #
+        # loop solver
         for t in range(num_loops):
-            if self.config.use_time_embed:
-                timesteps = torch.full((batch,), t, dtype=torch.float32, device=device)
-                print(f"{timesteps.shape=}")
-                t_emb = self.time_embed(
-                    timestep_embedding(timesteps, self.hidden_t_dim)
-                )
-                print(f"{t_emb.shape=}")
-                x = self.transformer.drop(
-                    x + t_emb.unsqueeze(1).expand(-1, seq_len, -1)
-                )
-                x = x + self.solver(x, t=None)
-
-            else:
-                x = self.transformer.drop(x)
-                x = x + self.solver(x, t)
+            x = self.transformer.drop(x)
+            x = self.solver(
+                x,
+                torch.tensor(t, device=device, dtype=torch.float32).expand(batch, 1),
+            )
 
         x = self.transformer.ln_f(x)
         return x
@@ -251,20 +211,21 @@ class LoopedTransformer(nn.Module):
 
     # https://github.com/AndyShih12/paradigms/blob/master/paradigms/stablediffusion_paradigms.py
     @torch.no_grad()
-    def paradigms_forward(
+    def picard_forward(
         self,
         x,
         num_loops: int = 1000,
         parallel: int = 100,
         tolerance: float = 0.1,
-        position_ids=None,
-        rm_pos_embd=False,
-        add_inputs_embeds=False,
+        # position_ids=None,
+        # rm_pos_embd=False,
+        # add_inputs_embeds=False,
         output_intermediate=False,
     ):
-        assert not add_inputs_embeds, "add_inputs_embeds is not supported"
+        # assert not add_inputs_embeds, "add_inputs_embeds is not supported"
 
-        device = inputs_embeds.device
+        # device = inputs_embeds.device
+        device = x.device
         batch_size, seq_len, hidden_dim = x.shape
 
         assert batch_size == 1, "batch size must be 1"
@@ -272,9 +233,10 @@ class LoopedTransformer(nn.Module):
         stats_pass_count = 0
         stats_flop_count = 0
 
-        timesteps = torch.arange(
-            0, num_loops * len(self.transformer.looped_block.layers), device=device
-        )
+        # timesteps = torch.arange(
+        #    0, num_loops * len(self.transformer.looped_block.layers), device=device
+        # )
+        timesteps = torch.arange(0, num_loops, device=device)
         parallel = min(parallel, len(timesteps))
 
         begin_idx = 0
@@ -300,7 +262,8 @@ class LoopedTransformer(nn.Module):
 
             model_output = torch.zeros_like(block_latents)
             for i, t in enumerate(t_vec):
-                model_output[i] = self.transformer.looped_block(block_latents[i], t)
+                # model_output[i] = self.transformer.looped_block(block_latents[i], t)
+                model_output[i] = self.picard_solver(block_latents[i], t)
 
             delta = model_output.reshape(parallel_len, 1, seq_len, hidden_dim)
             cumulative_delta = torch.cumsum(delta, dim=0)
@@ -423,36 +386,37 @@ def plot(x, y, model):
 # %%
 if __name__ == "__main__":
     config = LoopedConfig(
-        n_layer=1, n_head=2, hidden_dim=2, bias=True, use_time_embed=False
+        sheme=Scheme.LIE_TROTTER,
+        use_time_embed=True,
+        block_size=128,
+        vocab_size=128,
+        n_layer=1,
+        n_head=4,
+        hidden_dim=64,
+        n_reg_tokens=0,
+        bias=True,
+        dropout=0.0,
+        hidden_t_dim=16,
+        hypernet_hidden_dim=64,
+        step_size=0.1,
     )
 
+    batch_size = 5
+    seq_len = 10
+    num_loops = 1000
+
+    inputs_embeds = torch.rand(batch_size, seq_len, config.hidden_dim)
     model = LoopedTransformer(config)
-
-    x, y = generate_func(100, 5, 2)
-
-    model = train(x, model, epochs=1)
-    #y_hat = test(y, model)
-    plot(x, y, model)
-
-"""
-    # model = model.cuda()
-    model.eval()
-    batch_size = 1
-    seq_len = 5
-    # inputs_ids = torch.randn(batch_size, seq_len, config.hidden_dim)#.cuda()
-    # float
-    inputs_embeds = torch.rand(batch_size, seq_len, config.hidden_dim)  # .cuda(
-    num_loops = 5  # 000
 
     with torch.no_grad():
         out = model(inputs_embeds=inputs_embeds, num_loops=num_loops)
-    print("output of forward pass: ", out.shape)
+        print("output of forward pass: ", out.shape)
 
-    # paradigm forward
-    # out = model.paradigms_forward(
-    #    inputs_embeds, num_loops=num_loops, parallel=100, tolerance=0.1
-    # )
+        # paradigm forward
+        # out = model.picard_forward(
+        #    inputs_embeds, num_loops=num_loops, parallel=100, tolerance=0.1
+        # )
     # print("output of paradigms forward pass: ", out[0][0])
     # num_loops = 5000, parallel=100, tolerance=0.1, pass_count=778!
-"""
+
 # %%

@@ -1,6 +1,8 @@
 __pycache__
 .ignore
-data
+.data
 *.out
 *.path
 .d00*
+tmp/
+wandb/
