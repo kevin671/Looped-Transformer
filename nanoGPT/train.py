@@ -28,6 +28,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
+from looped_model import LoopedGPT, LoopedGPTConfig
+from dynamic_looped_model import DynamicLoopedGPT, DynamicLoopedGPTConfig
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -49,6 +51,7 @@ gradient_accumulation_steps = 5 * 8  # used to simulate larger batch sizes
 batch_size = 12  # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
 # model
+n_loops = 100
 n_layer = 12
 n_head = 12
 n_embd = 768
@@ -196,6 +199,37 @@ if init_from == "scratch":
     model_args["vocab_size"] = meta_vocab_size if meta_vocab_size is not None else 50304
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
+elif init_from == "looped_gpt":
+    model_args = dict(
+        n_loops=n_loops,
+        n_layer=n_layer,
+        n_head=n_head,
+        n_embd=n_embd,
+        block_size=block_size,
+        bias=bias,
+        vocab_size=None,
+        dropout=dropout,
+    )
+    print("Initializing a new LoopedGPT model from scratch")
+    model_args["vocab_size"] = meta_vocab_size if meta_vocab_size is not None else 50304
+    gptconf = LoopedGPTConfig(**model_args)
+    model = LoopedGPT(gptconf)
+elif init_from == "dynamic_looped_gpt":
+    model_args = dict(
+        n_loops=n_loops,
+        n_layer=n_layer,
+        n_head=n_head,
+        n_embd=n_embd,
+        block_size=block_size,
+        bias=bias,
+        vocab_size=None,
+        dropout=dropout,
+    )
+    print("Initializing a new LoopedGPT model from scratch")
+    model_args["vocab_size"] = meta_vocab_size if meta_vocab_size is not None else 50304
+    gptconf = DynamicLoopedGPTConfig(**model_args)
+    model = DynamicLoopedGPT(gptconf)
+
 elif init_from == "resume":
     print(f"Resuming training from {out_dir}")
     # resume training from a checkpoint.
@@ -254,7 +288,7 @@ if compile:
 
 # wrap model into DDP container
 if ddp:
-    model = DDP(model, device_ids=[ddp_local_rank])
+    model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=True)
 
 
 # helps estimate an arbitrarily accurate loss over either split using many batches
