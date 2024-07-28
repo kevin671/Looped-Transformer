@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-
-"""Transformer model."""
+"""Looped Transformer model."""
 
 import dataclasses
 from typing import Callable, Optional
@@ -245,6 +244,27 @@ class TransformerEncoder(hk.Module):
         super().__init__(name=name)
         self._config = config
         self._shared_embeddings_fn = shared_embeddings_fn
+        self._multi_head_attention = MultiHeadDotProductAttention(
+            num_heads=self._config.num_heads,
+            num_hiddens_per_head=self._config.num_hiddens_per_head,
+            positional_encodings=self._config.positional_encodings,
+            positional_encodings_params=self._config.positional_encodings_params,
+            attention_window=self._config.attention_window,
+        )
+        self._attn_layer_norm = hk.LayerNorm(
+            axis=-1, create_scale=True, create_offset=True
+        )
+        self._point_wise_feed_forward = hk.Sequential(
+            [
+                hk.Linear(self._config.embedding_dim * self._config.widening_factor),
+                jnn.relu,
+                hk.Linear(self._config.embedding_dim),
+            ]
+        )
+
+        self._ff_layer_norm = hk.LayerNorm(
+            axis=-1, create_scale=True, create_offset=True
+        )
 
     def __call__(self, x: jnp.ndarray) -> chex.Array:
         """Returns the transformer encoder output, shape [B, T, E]."""
@@ -296,13 +316,7 @@ class TransformerEncoder(hk.Module):
             causal_mask = None
 
         for _ in range(self._config.num_layers):
-            attention = MultiHeadDotProductAttention(
-                num_heads=self._config.num_heads,
-                num_hiddens_per_head=self._config.num_hiddens_per_head,
-                positional_encodings=self._config.positional_encodings,
-                positional_encodings_params=pos_enc_params,
-                attention_window=self._config.attention_window,
-            )(
+            attention = self._multi_head_attention(
                 inputs_q=h,
                 inputs_kv=h,
                 mask=causal_mask,
@@ -311,17 +325,20 @@ class TransformerEncoder(hk.Module):
             attention = hk.dropout(
                 hk.next_rng_key(), self._config.dropout_prob, attention
             )
-            attention = layer_norm(h + attention)
+            # attention = layer_norm(h + attention)
+            attention = self._attn_layer_norm(h + attention)
 
             # Position-wise feedforward network.
-            h = hk.Linear(self._config.embedding_dim * self._config.widening_factor)(
-                attention
-            )
-            h = jnn.relu(h)
-            h = hk.Linear(self._config.embedding_dim)(h)
+            # h = hk.Linear(self._config.embedding_dim * self._config.widening_factor)(
+            #    attention
+            # )
+            # h = jnn.relu(h)
+            # h = hk.Linear(self._config.embedding_dim)(h)
+            h = self._point_wise_feed_forward(attention)
 
             h = hk.dropout(hk.next_rng_key(), self._config.dropout_prob, h)
-            h = layer_norm(h + attention)
+            # h = layer_norm(h + attention)
+            h = self._ff_layer_norm(h + attention)
         return h
 
 
@@ -344,6 +361,37 @@ class TransformerDecoder(hk.Module):
         super().__init__(name=name)
         self._config = config
         self._shared_embeddings_fn = shared_embeddings_fn
+        self._self_attention = MultiHeadDotProductAttention(
+            num_heads=self._config.num_heads,
+            num_hiddens_per_head=self._config.num_hiddens_per_head,
+            positional_encodings=self._config.positional_encodings,
+            positional_encodings_params=self._config.positional_encodings_params,
+            attention_window=self._config.attention_window,
+        )
+        self._cross_attention = MultiHeadDotProductAttention(
+            num_heads=self._config.num_heads,
+            num_hiddens_per_head=self._config.num_hiddens_per_head,
+            positional_encodings=self._config.positional_encodings,
+            positional_encodings_params=self._config.positional_encodings_params,
+            attention_window=self._config.attention_window,
+        )
+
+        self._self_attn_layer_norm = hk.LayerNorm(
+            axis=-1, create_scale=True, create_offset=True
+        )
+        self._cross_attn_layer_norm = hk.LayerNorm(
+            axis=-1, create_scale=True, create_offset=True
+        )
+        self._point_wise_feed_forward = hk.Sequential(
+            [
+                hk.Linear(self._config.embedding_dim * self._config.widening_factor),
+                jnn.relu,
+                hk.Linear(self._config.embedding_dim),
+            ]
+        )
+        self._ff_layer_norm = hk.LayerNorm(
+            axis=-1, create_scale=True, create_offset=True
+        )
 
     def __call__(self, encoded: chex.Array, targets: chex.Array) -> chex.Array:
         """Returns the transformer decoder output, shape [B, T_O, E].
@@ -398,39 +446,29 @@ class TransformerDecoder(hk.Module):
         )
 
         for _ in range(self._config.num_layers):
-            self_attention = MultiHeadDotProductAttention(
-                num_heads=self._config.num_heads,
-                num_hiddens_per_head=self._config.num_hiddens_per_head,
-                positional_encodings=self._config.positional_encodings,
-                positional_encodings_params=self._config.positional_encodings_params,
-                attention_window=self._config.attention_window,
-            )(inputs_q=h, inputs_kv=h, mask=causal_mask, causal=True)
+            self_attention = self._self_attention(
+                inputs_q=h, inputs_kv=h, mask=causal_mask, causal=True
+            )
             self_attention = hk.dropout(
                 hk.next_rng_key(), self._config.dropout_prob, self_attention
             )
-            self_attention = layer_norm(h + self_attention)
+            self_attention = self._self_attn_layer_norm(h + self_attention)
 
-            cross_attention = MultiHeadDotProductAttention(
-                num_heads=self._config.num_heads,
-                num_hiddens_per_head=self._config.num_hiddens_per_head,
-                positional_encodings=self._config.positional_encodings,
-                positional_encodings_params=self._config.positional_encodings_params,
-                attention_window=self._config.attention_window,
-            )(inputs_q=self_attention, inputs_kv=encoded, causal=True)
+            cross_attention = self._cross_attention(
+                inputs_q=self_attention, inputs_kv=encoded, causal=True
+            )
             cross_attention = hk.dropout(
                 hk.next_rng_key(), self._config.dropout_prob, cross_attention
             )
-            cross_attention = layer_norm(self_attention + cross_attention)
+            cross_attention = self._cross_attn_layer_norm(
+                self_attention + cross_attention
+            )
 
             # Position-wise feedforward network.
-            h = hk.Linear(self._config.embedding_dim * self._config.widening_factor)(
-                cross_attention
-            )
-            h = jnn.relu(h)
-            h = hk.Linear(self._config.embedding_dim)(h)
+            h = self._point_wise_feed_forward(cross_attention)
 
             h = hk.dropout(hk.next_rng_key(), self._config.dropout_prob, h)
-            h = layer_norm(h + cross_attention)
+            h = self._ff_layer_norm(h + cross_attention)
 
         return h
 

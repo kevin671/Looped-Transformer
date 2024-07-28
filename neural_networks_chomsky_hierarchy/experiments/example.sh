@@ -7,7 +7,9 @@
 
 export PYTHONPATH=$(pwd)/..
 
+export WANDB_CONFIG_DIR="/work/gg45/g45004/Looped-Transformer/neural_networks_chomsky_hierarchy/tmp"
+export WANDB_API_KEY="f1462e37dc61bbcaa335f10a8dd966bbaec5423a"
+
 source /work/gg45/g45004/.bashrc
-conda activate nnch
 
 python experiments/example.py

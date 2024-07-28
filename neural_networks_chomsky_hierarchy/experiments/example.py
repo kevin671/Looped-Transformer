@@ -100,8 +100,8 @@ REGULAR_TASKS = [
 
 DCF_TASKS = [
     "modular_arithmetic_brackets",
-    #"reverse_string",
-    #"stack_manipulation",
+    # "reverse_string",
+    # "stack_manipulation",
     # "solve_equation",
 ]
 
@@ -115,10 +115,15 @@ CS_TASKS = [
     "bucket_sort",
 ]
 
+GRAPH_TASKS = [
+    "connectivity",
+    "cycle",
+]
+
 _TASK_LEVEL = flags.DEFINE_string(
     "task_level",
-    default="dcf",
-    help="Task level (regular, dcf, cs).",
+    default="graph",  # "dcf",
+    help="Task level (regular, dcf, cs, graph).",
 )
 
 
@@ -130,6 +135,8 @@ def main(unused_argv) -> None:
         tasks = DCF_TASKS
     elif _TASK_LEVEL.value == "cs":
         tasks = CS_TASKS
+    elif _TASK_LEVEL.value == "graph":
+        tasks = GRAPH_TASKS
     else:
         tasks = [_TASK.value]
 
@@ -165,6 +172,7 @@ def main(unused_argv) -> None:
 
         # Create the loss and accuracy based on the pointwise ones.
         def loss_fn(output, target):
+            print(output.shape, target.shape)
             loss = jnp.mean(jnp.sum(task.pointwise_loss_fn(output, target), axis=-1))
             return loss, {}
 
@@ -190,6 +198,8 @@ def main(unused_argv) -> None:
             range_test_total_batch_size=512,
             range_test_sub_batch_size=64,
             is_autoregressive=_IS_AUTOREGRESSIVE.value,
+            wandb_project="chomsky_hierarchy",
+            wandb_name=f"{task_name}_{_ARCHITECTURE.value}",
         )
 
         # print params
@@ -203,7 +213,7 @@ def main(unused_argv) -> None:
         print(f"model: {_ARCHITECTURE.value}")
         print(f"is_autoregressive: {_IS_AUTOREGRESSIVE.value}")
 
-        training_worker = training.TrainingWorker(training_params, use_tqdm=True)
+        training_worker = training.TrainingWorker(training_params, use_tqdm=False)
         _, eval_results, _ = training_worker.run()
 
         # Gather results and print final score.

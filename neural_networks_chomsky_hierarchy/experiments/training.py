@@ -32,6 +32,7 @@ from neural_networks_chomsky_hierarchy.experiments import curriculum as curricul
 from neural_networks_chomsky_hierarchy.experiments import range_evaluation
 from neural_networks_chomsky_hierarchy.tasks import task as task_lib
 
+import wandb
 
 _LossMetrics = Optional[Mapping[str, jnp.ndarray]]
 _LossFn = Callable[[chex.Array, chex.Array], tuple[float, _LossMetrics]]
@@ -66,6 +67,9 @@ class ClassicTrainingParams:
     max_range_test_length: int = 100
 
     accuracy_fn: Optional[Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray]] = None
+
+    wandb_project: str = "chomsky-hierarchy"
+    wandb_name: str = "task_model"
 
 
 def _apply_loss_and_metrics_fn(
@@ -174,6 +178,12 @@ class TrainingWorker:
         self._training_params = training_params
         self._use_tqdm = use_tqdm
 
+        wandb.init(
+            project=training_params.wandb_project,
+            name=training_params.wandb_name,
+            config=training_params,
+        )
+
     def run(
         self,
     ) -> tuple[
@@ -257,6 +267,8 @@ class TrainingWorker:
                 for key, value in train_metrics.items():
                     log_data[".".join(["train_metrics", key])] = np.array(value)
                 results.append(log_data)
+
+                wandb.log(log_data)
 
             # We need to access this private attribute since the default reserve size
             # can not be edited yet.

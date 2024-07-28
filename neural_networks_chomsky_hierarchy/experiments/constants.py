@@ -41,7 +41,8 @@ from neural_networks_chomsky_hierarchy.tasks.regular import cycle_navigation
 from neural_networks_chomsky_hierarchy.tasks.regular import even_pairs
 from neural_networks_chomsky_hierarchy.tasks.regular import modular_arithmetic
 from neural_networks_chomsky_hierarchy.tasks.regular import parity_check
-
+from neural_networks_chomsky_hierarchy.tasks.graph import connectivity
+from neural_networks_chomsky_hierarchy.tasks.graph import cycle
 
 MODEL_BUILDERS = {
     "rnn": functools.partial(rnn.make_rnn, rnn_core=hk.VanillaRNN),
@@ -91,6 +92,8 @@ TASK_BUILDERS = {
     "solve_equation": solve_equation.SolveEquation,
     "stack_manipulation": stack_manipulation.StackManipulation,
     "bucket_sort": bucket_sort.BucketSort,
+    "connectivity": connectivity.Connectivity,
+    "cycle": cycle.Cycle,
 }
 
 TASK_LEVELS = {
