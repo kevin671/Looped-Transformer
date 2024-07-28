@@ -15,16 +15,14 @@
 
 """Example script to train and evaluate a network."""
 
-from absl import app
-from absl import flags
 import haiku as hk
 import jax.numpy as jnp
 import numpy as np
+from absl import app, flags
 
 from neural_networks_chomsky_hierarchy.experiments import constants
 from neural_networks_chomsky_hierarchy.experiments import curriculum as curriculum_lib
-from neural_networks_chomsky_hierarchy.experiments import training
-from neural_networks_chomsky_hierarchy.experiments import utils
+from neural_networks_chomsky_hierarchy.experiments import training, utils
 
 _BATCH_SIZE = flags.DEFINE_integer(
     "batch_size",
@@ -45,7 +43,7 @@ _TASK = flags.DEFINE_string(
 )
 _ARCHITECTURE = flags.DEFINE_string(
     "architecture",
-    default="looped_transformer_encoder",  # "tape_rnn", "looped_transformer", "transformer_encoder
+    default="transformer_encoder",  # "tape_rnn", "looped_transformer", "transformer_encoder", "looped_transformer_encoder"
     help="Model architecture (see `constants.py` for other architectures).",
 )
 
@@ -122,7 +120,7 @@ GRAPH_TASKS = [
 
 _TASK_LEVEL = flags.DEFINE_string(
     "task_level",
-    default="graph",  # "dcf",
+    default="dcf",
     help="Task level (regular, dcf, cs, graph).",
 )
 
@@ -172,7 +170,6 @@ def main(unused_argv) -> None:
 
         # Create the loss and accuracy based on the pointwise ones.
         def loss_fn(output, target):
-            print(output.shape, target.shape)
             loss = jnp.mean(jnp.sum(task.pointwise_loss_fn(output, target), axis=-1))
             return loss, {}
 
@@ -213,7 +210,7 @@ def main(unused_argv) -> None:
         print(f"model: {_ARCHITECTURE.value}")
         print(f"is_autoregressive: {_IS_AUTOREGRESSIVE.value}")
 
-        training_worker = training.TrainingWorker(training_params, use_tqdm=False)
+        training_worker = training.TrainingWorker(training_params, use_tqdm=True)
         _, eval_results, _ = training_worker.run()
 
         # Gather results and print final score.

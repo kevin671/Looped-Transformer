@@ -1,5 +1,5 @@
 #!/bin/sh
-#PJM -L rscgrp=share-short
+#PJM -L rscgrp=share
 #PJM -L gpu=1
 #PJM -g gg45
 #PJM -j
