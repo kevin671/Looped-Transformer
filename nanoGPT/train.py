@@ -16,20 +16,19 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123
 (If your cluster does not have Infiniband interconnect prepend NCCL_IB_DISABLE=1)
 """
 
-import os
-import time
 import math
+import os
 import pickle
+import time
 from contextlib import nullcontext
 
 import numpy as np
 import torch
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group, destroy_process_group
-
-from model import GPTConfig, GPT
-from looped_model import LoopedGPT, LoopedGPTConfig
 from dynamic_looped_model import DynamicLoopedGPT, DynamicLoopedGPTConfig
+from looped_model import LoopedGPT, LoopedGPTConfig
+from model import GPT, GPTConfig
+from torch.distributed import destroy_process_group, init_process_group
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -225,7 +224,7 @@ elif init_from == "dynamic_looped_gpt":
         vocab_size=None,
         dropout=dropout,
     )
-    print("Initializing a new LoopedGPT model from scratch")
+    print("Initializing a new DynamicLoopedGPT model from scratch")
     model_args["vocab_size"] = meta_vocab_size if meta_vocab_size is not None else 50304
     gptconf = DynamicLoopedGPTConfig(**model_args)
     model = DynamicLoopedGPT(gptconf)

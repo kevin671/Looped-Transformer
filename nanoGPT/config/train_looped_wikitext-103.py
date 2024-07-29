@@ -4,16 +4,16 @@
 
 init_from = "looped_gpt"
 
-n_loops = 100
-n_layer = 1
+n_loops = 12
+n_layer = 3
 n_head = 12
 n_embd = 768
 
 wandb_log = True
 wandb_project = "perplexity"
-wandb_run_name = f"looped_{n_loops}_wikitext-103"
+wandb_run_name = f"looped_{n_layer}_layer_{n_loops}_loop_wikitext-103"
 
-out_dir = f"out/looped_{n_loops}_wikitext-103"
+out_dir = f"out/looped_{n_layer}_layer_{n_loops}_loop_wikitext-103"
 
 # these make the total batch size be ~0.5M
 # 12 batch size * 1024 block size * 5 gradaccum * 8 GPUs = 491,520

@@ -1,12 +1,11 @@
-import math
 import inspect
+import math
+from dataclasses import dataclass
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-from model import LayerNorm, Block
-
-from dataclasses import dataclass
+from model import Block, LayerNorm
 
 
 @dataclass
@@ -38,8 +37,7 @@ class LoopedGPT(nn.Module):
                 wte=nn.Embedding(config.vocab_size, config.n_embd),
                 wpe=nn.Embedding(config.block_size, config.n_embd),
                 drop=nn.Dropout(config.dropout),
-                # h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-                h=Block(config),
+                h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
                 ln_f=LayerNorm(config.n_embd, bias=config.bias),
             )
         )
@@ -96,10 +94,9 @@ class LoopedGPT(nn.Module):
         tok_emb = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
-        # for block in self.transformer.h:
-        # x = block(x)
         for _ in range(self.n_loops):
-            x = self.transformer.h(x)
+            for block in self.transformer.h:
+                x = block(x)
 
         x = self.transformer.ln_f(x)
 
