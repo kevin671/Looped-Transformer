@@ -25,10 +25,13 @@ from contextlib import nullcontext
 import numpy as np
 import torch
 from dynamic_looped_model import DynamicLoopedGPT, DynamicLoopedGPTConfig
+from hyper_gpt import HyperGPT, HyperGPTConfig
 from looped_model import LoopedGPT, LoopedGPTConfig
 from model import GPT, GPTConfig
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
+from tying_transformer import WeightTyingGPT, WeightTyingGPTConfig
+from universal_transformer import UniversalGPT, UniversalGPTConfig
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -56,6 +59,11 @@ n_head = 12
 n_embd = 768
 dropout = 0.0  # for pretraining 0 is good, for finetuning try 0.1+
 bias = False  # do we use bias inside LayerNorm and Linear layers?
+input_injection = False
+share_attn = False
+share_mlp = False
+hyper_size = 256
+n_z = 64
 # adamw optimizer
 learning_rate = 6e-4  # max learning rate
 max_iters = 600000  # total number of training iterations
@@ -208,6 +216,7 @@ elif init_from == "looped_gpt":
         bias=bias,
         vocab_size=None,
         dropout=dropout,
+        input_injection=input_injection,
     )
     print("Initializing a new LoopedGPT model from scratch")
     model_args["vocab_size"] = meta_vocab_size if meta_vocab_size is not None else 50304
@@ -228,6 +237,56 @@ elif init_from == "dynamic_looped_gpt":
     model_args["vocab_size"] = meta_vocab_size if meta_vocab_size is not None else 50304
     gptconf = DynamicLoopedGPTConfig(**model_args)
     model = DynamicLoopedGPT(gptconf)
+
+elif init_from == "universal_gpt":
+    model_args = dict(
+        n_layer=n_layer,
+        n_head=n_head,
+        n_embd=n_embd,
+        block_size=block_size,
+        bias=bias,
+        vocab_size=None,
+        dropout=dropout,
+        max_hop=100,
+    )
+    print("Initializing a new UniversalGPT model from scratch")
+    model_args["vocab_size"] = meta_vocab_size if meta_vocab_size is not None else 50304
+    gptconf = UniversalGPTConfig(**model_args)
+    model = UniversalGPT(gptconf)
+
+elif init_from == "hyper_gpt":
+    model_args = dict(
+        n_layer=n_layer,
+        n_head=n_head,
+        n_embd=n_embd,
+        block_size=block_size,
+        bias=bias,
+        vocab_size=None,
+        dropout=dropout,
+        hyper_size=hyper_size,
+        n_z=n_z,
+    )
+    print("Initializing a new HyperGPT model from scratch")
+    model_args["vocab_size"] = meta_vocab_size if meta_vocab_size is not None else 50304
+    gptconf = HyperGPTConfig(**model_args)
+    model = HyperGPT(gptconf)
+
+elif init_from == "tying_gpt":
+    model_args = dict(
+        n_layer=n_layer,
+        n_head=n_head,
+        n_embd=n_embd,
+        block_size=block_size,
+        bias=bias,
+        vocab_size=None,
+        dropout=dropout,
+        share_attn=share_attn,
+        share_mlp=share_mlp,
+    )
+    print("Initializing a new WeightTyingGPT model from scratch")
+    model_args["vocab_size"] = meta_vocab_size if meta_vocab_size is not None else 50304
+    gptconf = WeightTyingGPTConfig(**model_args)
+    model = WeightTyingGPT(gptconf)
 
 elif init_from == "resume":
     print(f"Resuming training from {out_dir}")
