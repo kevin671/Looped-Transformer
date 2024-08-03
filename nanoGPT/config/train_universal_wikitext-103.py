@@ -6,8 +6,8 @@ import uuid
 init_from = "universal_gpt"
 
 n_layer = 1
-n_head = 12
-n_embd = 768
+n_head = 16
+n_embd = 1280
 
 unique_suffix = uuid.uuid4().hex[:4]  # ランダムな8文字の文字列を生成
 

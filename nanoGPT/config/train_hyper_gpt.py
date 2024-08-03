@@ -1,6 +1,6 @@
 init_from = "hyper_gpt"
 
-n_layer = 12
+n_layer = 100
 n_head = 12
 n_embd = 768
 
@@ -15,7 +15,7 @@ out_dir = f"out/hypergpt_{n_layer}_layer"
 
 # these make the total batch size be ~0.5M
 # 12 batch size * 1024 block size * 5 gradaccum * 8 GPUs = 491,520
-batch_size = 12
+batch_size = 2
 block_size = 1024
 gradient_accumulation_steps = 10 * 4
 
@@ -30,3 +30,5 @@ log_interval = 10
 
 # weight decay
 weight_decay = 1e-1
+
+learning_rate = 1e-4

@@ -5,7 +5,7 @@
 init_from = "dynamic_looped_gpt"
 
 # model config
-n_loops = 100
+n_loops = 12
 n_layer = 1
 n_head = 12
 n_embd = 768

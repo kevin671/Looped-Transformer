@@ -31,7 +31,7 @@ from model import GPT, GPTConfig
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tying_transformer import WeightTyingGPT, WeightTyingGPTConfig
-from universal_transformer import UniversalGPT, UniversalGPTConfig
+from nanoGPT.UTransformer import UniversalGPT, UniversalGPTConfig
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText

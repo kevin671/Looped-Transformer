@@ -18,8 +18,8 @@ class UniversalGPTConfig:
         50304  # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     )
     n_layer: int = 1
-    n_head: int = 12
-    n_embd: int = 768
+    n_head: int = 16  # 12
+    n_embd: int = 1280  # 768
     dropout: float = 0.0
     bias: bool = (
         False  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
@@ -89,12 +89,6 @@ class UniversalGPT(nn.Module):
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
 
     def get_num_params(self, non_embedding=True):
-        """
-        Return the number of parameters in the model.
-        For non-embedding count (default), the position embeddings get subtracted.
-        The token embeddings would too, except due to the parameter sharing these
-        params are actually used as weights in the final layer, so we include them.
-        """
         n_params = sum(p.numel() for p in self.parameters())
         if non_embedding:
             n_params -= self.transformer.wpe.weight.numel()
@@ -248,7 +242,7 @@ class ACT_basic(nn.Module):
         self.p.bias.data.fill_(1)
         self.threshold = 1 - 0.1
 
-    def forward(self, state, inputs, fn, pos_enc, max_hop, encoder_output=None):
+    def forward(self, state, inputs, fn, pos_enc, max_hop, hypernet=None):
         device = state.device
         # init_hdd
         ## [B, S]
@@ -303,8 +297,8 @@ class ACT_basic(nn.Module):
             # p when the input hasn't halted yet
             # the remainders when it halted this step
             update_weights = p * still_running + new_halted * remainders  # [B, S]
-            if encoder_output:
-                state, _ = fn((state, encoder_output))
+            if hypernet:
+                state, _ = fn((state, step))
             else:
                 # apply transformation on the state
                 state = fn(state)

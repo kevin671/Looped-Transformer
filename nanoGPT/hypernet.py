@@ -1,13 +1,15 @@
 # %%
+import math
+
 import torch
 import torch.nn as nn
-import math
 
 
 class SinusoidalPositionEmbeddings(nn.Module):
-    def __init__(self, dim):
+    def __init__(self, dim, scale=1):
         super().__init__()
         self.dim = dim
+        self.scale = scale
 
     def forward(self, time):
         device = time.device
@@ -17,9 +19,45 @@ class SinusoidalPositionEmbeddings(nn.Module):
         # embeddings = time[:, None] * embeddings[None, :]
         embeddings = time * embeddings
         embeddings = torch.cat((embeddings.sin(), embeddings.cos()), dim=-1)
-        return embeddings
+        return embeddings * self.scale
 
 
+class VAE(nn.Module):
+    pass
+
+
+class FullWeightHyperNetwork(nn.Module):
+    def __init__(self, t_dim, n_dim):
+        super().__init__()
+        self.t_dim = t_dim
+        self.n_dim = n_dim
+
+        self.time_mlp = nn.Sequential(
+            SinusoidalPositionEmbeddings(t_dim),
+            nn.Linear(t_dim, t_dim * 4),
+            nn.SiLU(),
+            nn.Linear(t_dim * 4, t_dim),
+        )
+
+        self.weight_mlp = nn.Sequential(
+            nn.Linear(t_dim, n_dim * 4),
+            nn.SiLU(),
+            nn.Linear(n_dim * 4, n_dim),
+        )
+
+    def forward(self, time):
+        t = self.time_mlp(time)
+        weight = self.weight_mlp(t)
+        return weight
+
+
+# time = torch.tensor(1.0)
+# model = FullWeightHyperNetwork(128, 768)
+# out = model(time)
+# print(out.shape)
+
+
+# %%
 def lora_transform(tensor, n_embd, r, scaling):
     lora_A, lora_B = tensor.chunk(2, dim=-1)
     lora_A = lora_A.view(n_embd, r)
@@ -32,15 +70,16 @@ class HyperNetworkMLPLoRA(nn.Module):  # for attn
         super().__init__()
         out_n_embd = n_embd * 2 * 2
         self.n_embd = n_embd  # 768
+
         self.time_mlp = nn.Sequential(
-            SinusoidalPositionEmbeddings(t_dim),
-            nn.Linear(t_dim, t_dim * 4),
+            SinusoidalPositionEmbeddings(t_dim, scale=10),
+            nn.Linear(t_dim, t_dim * 4),  # 320 -> 1280
             nn.SiLU(),
-            nn.Linear(t_dim * 4, t_dim),
+            nn.Linear(t_dim * 4, t_dim * 4),
         )
 
         self.weight_mlp = nn.Sequential(
-            nn.Linear(t_dim, r * out_n_embd * 4),
+            nn.Linear(t_dim * 4, r * out_n_embd * 4),
             nn.SiLU(),
             nn.Linear(r * out_n_embd * 4, r * out_n_embd),
         )
@@ -63,7 +102,7 @@ class HyperNetworkAttnLoRA(nn.Module):  # for attn
         out_n_embd = n_embd * 2 * 4  # for attn q,k,v, o
         self.n_embd = n_embd  # 768
         self.time_mlp = nn.Sequential(
-            SinusoidalPositionEmbeddings(t_dim),
+            SinusoidalPositionEmbeddings(t_dim, scale=10),
             nn.Linear(t_dim, t_dim * 4),
             nn.SiLU(),
             nn.Linear(t_dim * 4, t_dim),
@@ -96,19 +135,50 @@ class HyperNetworkAttnLoRA(nn.Module):  # for attn
         )
 
 
+class HyperNetworkBias(nn.Module):  # for attn
+    def __init__(self, t_dim, n_embd):
+        super().__init__()
+        out_n_embd = n_embd
+        self.n_embd = n_embd  # 768
+
+        self.time_mlp = nn.Sequential(
+            SinusoidalPositionEmbeddings(t_dim, scale=10),
+            nn.Linear(t_dim, t_dim * 4),  # 320 -> 1280
+            nn.SiLU(),
+            nn.Linear(t_dim * 4, t_dim * 4),
+        )
+
+        self.weight_mlp = nn.Sequential(
+            nn.Linear(t_dim * 4, out_n_embd * 4),
+            nn.SiLU(),
+            nn.Linear(out_n_embd * 4, out_n_embd),
+        )
+
+        self.lora_alpha = 1.0
+        self.scaling = self.lora_alpha / self.r
+
+    def forward(self, time):
+        t = self.time_mlp(time)
+        weight = self.weight_mlp(t)
+        return weight  # [n_embd]
+
+
 # %%
-# time = torch.tensor(1.0)
-# model = HyperNetworkMLPLoRA(128, 768, r=2)
-# out, proj = model(time)
-# print(out, proj)
-# print(out.shape, proj.shape)
+if __name__ == "__main__":
+    time = torch.tensor(1.0)
+    # time_emb = SinusoidalPositionEmbeddings(128)(time)
+    # print(time_emb[:10], time_emb.shape)
+    model = HyperNetworkMLPLoRA(128, 768, r=2)
+    out, proj = model(time)
+    print(out, proj)
+    # print(out.shape, proj.shape)
 
-# model = HyperNetworkAttnLoRA(512, 768, r=2)
-# out, o = model(time)
-# print(out.shape, o.shape)
+    # model = HyperNetworkAttnLoRA(512, 768, r=2)
+    # out, o = model(time)
+    # print(out.shape, o.shape)
 
 
-# %%
+"""
 class HyperNetwork(nn.Module):
     def __init__(self, dim, n_embd, bias=False):
         super().__init__()
@@ -187,18 +257,6 @@ class HyperNetwork(nn.Module):
             ),
             "proj_b": weights[self.proj_b_start : self.proj_b_end],
         }
-
-
-# %%
-# time = torch.tensor(1.0)
-
-# embeddings = SinusoidalPositionEmbeddings(512)
-# print(embeddings(time).shape)
-
-# hypernet = HyperNetwork(512, 768)
-# out = hypernet(time)
-
-# for k, v in out.items():
-#    print(k, v.shape)
+"""
 
 # %%

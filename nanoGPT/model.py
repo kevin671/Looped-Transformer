@@ -7,8 +7,9 @@ https://github.com/openai/gpt-2/blob/master/src/model.py
 https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
 """
 
-import math
+# %%
 import inspect
+import math
 from dataclasses import dataclass
 
 import torch
@@ -132,6 +133,9 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln_2(x))
         return x
 
+    def derivative(self, x):
+        return self.attn(self.ln_1(x)) + self.mlp(self.ln_2(x))
+
 
 @dataclass
 class GPTConfig:
@@ -144,7 +148,7 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = (
-        True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+        False  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     )
 
 
@@ -206,7 +210,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, debug=False):
         device = idx.device
         b, t = idx.size()
         assert (
@@ -218,8 +222,14 @@ class GPT(nn.Module):
         tok_emb = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
+
+        debug_data = []
         for block in self.transformer.h:
             x = block(x)
+            # print(x.shape)  # torch.Size([bs, seq_len, 768])
+            if debug:
+                print(x[0, 0, :10])
+                debug_data.append(x)
         x = self.transformer.ln_f(x)
 
         if targets is not None:
@@ -234,6 +244,9 @@ class GPT(nn.Module):
                 x[:, [-1], :]
             )  # note: using list [-1] to preserve the time dim
             loss = None
+
+        if debug:
+            return logits, loss, debug_data
 
         return logits, loss
 
@@ -399,3 +412,82 @@ class GPT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
+
+
+# %%
+if __name__ == "__main__":
+    import os
+
+    import numpy as np
+
+    device = "cpu"
+    device_type = "cpu"
+    data_dir = "/work/gg45/g45004/Looped-Transformer/nanoGPT/data/wikitext-103"
+
+    def get_batch(split="train", batch_size=2, block_size=1024):
+        # We recreate np.memmap every batch to avoid a memory leak, as per
+        # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
+        if split == "train":
+            data = np.memmap(
+                os.path.join(data_dir, "train.bin"), dtype=np.uint16, mode="r"
+            )
+        else:
+            data = np.memmap(
+                os.path.join(data_dir, "validation.bin"), dtype=np.uint16, mode="r"
+            )
+        ix = torch.randint(len(data) - block_size, (batch_size,))
+        x = torch.stack(
+            [torch.from_numpy((data[i : i + block_size]).astype(np.int64)) for i in ix]
+        )
+        y = torch.stack(
+            [
+                torch.from_numpy((data[i + 1 : i + 1 + block_size]).astype(np.int64))
+                for i in ix
+            ]
+        )
+        if device_type == "cuda":
+            # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
+            x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(
+                device, non_blocking=True
+            )
+        else:
+            x, y = x.to(device), y.to(device)
+        return x, y
+
+    x, y = get_batch()
+
+    config = GPTConfig()
+    model = GPT(config)
+
+    ckpt = torch.load(
+        "/work/gg45/g45004/Looped-Transformer/nanoGPT/out/ckpt.pt",
+        map_location="cpu",
+    )
+    state_dict = ckpt["model"]
+    unwanted_prefix = "_orig_mod."
+    for k, v in list(state_dict.items()):
+        if k.startswith(unwanted_prefix):
+            state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
+    model.load_state_dict(state_dict)
+
+    with torch.no_grad():
+        input = torch.randint(0, 50257, (1, 12))
+        output, _, debugs = model(x, debug=True)
+    # print(output[0])  # torch.Size([1, 50257])
+    # print(len(debugs))  # 200
+    # print(debugs[0].shape)  # torch.Size([1, 12, 768])
+
+    # show the norm of the tensor at each loop
+    norms = [torch.linalg.norm(d).item() for d in debugs]
+    print(norms)
+    # print as figure
+    import matplotlib.pyplot as plt
+
+    plt.plot(norms)
+    plt.xlabel("n_loops")
+    plt.ylabel("Norm")
+    plt.title("Norms of the tensor at each loop")
+    plt.show()
+
+
+# %%
