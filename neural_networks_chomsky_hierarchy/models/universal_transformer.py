@@ -1,5 +1,8 @@
 # https://github.com/google-research/scenic/tree/main/scenic/projects/baselines/universal_transformer
+# %%
+
 import dataclasses
+import sys
 from typing import Callable, Optional
 
 import chex
@@ -8,6 +11,7 @@ import jax
 import jax.nn as jnn
 import jax.numpy as jnp
 
+sys.path.append("/work/gg45/g45004/Looped-Transformer/")
 from neural_networks_chomsky_hierarchy.models import (
     positional_encodings as pos_encs_lib,
 )
@@ -21,7 +25,7 @@ from neural_networks_chomsky_hierarchy.models.transformer import (
 
 @chex.dataclass
 class AdaptiveComputationTimeConfig:
-    act_max_steps: int = 12
+    act_max_steps: int = 100
     act_epsilon: float = 0.01
     act_type: str = "basic"  # 'random', 'accumulated', 'basic'
     act_level: str = "per_example"  # 'per_example', 'per_token'
@@ -38,7 +42,7 @@ class UniversalTransformerConfig:
     # The dimension of the first embedding.
     embedding_dim: int = 64
     # The number of multi-head attention layers.
-    num_layers: int = 5
+    num_layers: int = 1
     # The number of heads per layer.
     num_heads: int = 8
     # The number of hidden neurons per head. If None, it is set to be equal to
@@ -77,7 +81,7 @@ class UniversalTransformerConfig:
 
     deterministic: Optional[bool] = None
     stochastic_depth: float = 0.1  # 0.0
-    parameter_sharing: bool = False
+    parameter_sharing: bool = True
     ac_config: Optional[AdaptiveComputationTimeConfig] = AdaptiveComputationTimeConfig()
 
 
@@ -125,8 +129,8 @@ class UTStochasticDepth(hk.Module):
 
 
 class EncoderBlock(hk.Module):
-    def __init__(self, config, name=None):
-        super().__init__(name=name)
+    def __init__(self, config):
+        super().__init__()
         self._config = config
 
     def __call__(self, inputs, causal_mask, pos_enc_params):
@@ -163,23 +167,70 @@ class EncoderBlock(hk.Module):
         return t + h
 
 
-class TransformerEncoder(hk.Module):
+class DecoderBlock(hk.Module):
+    def __init__(self, config):
+        super().__init__()
+        self._config = config
+
+    def __call__(self, h, encoded, causal_mask):
+        # Self-attention
+        self_attention = MultiHeadDotProductAttention(
+            num_heads=self._config.num_heads,
+            num_hiddens_per_head=self._config.num_hiddens_per_head,
+            positional_encodings=self._config.positional_encodings,
+            positional_encodings_params=self._config.positional_encodings_params,
+            attention_window=self._config.attention_window,
+        )(inputs_q=h, inputs_kv=h, mask=causal_mask, causal=True)
+        self_attention = hk.dropout(
+            hk.next_rng_key(), self._config.dropout_prob, self_attention
+        )
+
+        self_attention = UTStochasticDepth(rate=self._config.stochastic_depth)(
+            self_attention, self._config.deterministic
+        )
+        h = h + self_attention
+
+        # Cross-attention
+        self_attention = layer_norm(h)
+        cross_attention = MultiHeadDotProductAttention(
+            num_heads=self._config.num_heads,
+            num_hiddens_per_head=self._config.num_hiddens_per_head,
+            positional_encodings=self._config.positional_encodings,
+            positional_encodings_params=self._config.positional_encodings_params,
+            attention_window=self._config.attention_window,
+        )(inputs_q=self_attention, inputs_kv=encoded, causal=True)
+        cross_attention = hk.dropout(
+            hk.next_rng_key(), self._config.dropout_prob, cross_attention
+        )
+        cross_attention = UTStochasticDepth(rate=self._config.stochastic_depth)(
+            cross_attention, self._config.deterministic
+        )
+        h = h + cross_attention
+
+        # Position-wise feedforward network
+        cross_attention = layer_norm(h)
+        t = hk.Linear(self._config.embedding_dim * self._config.widening_factor)(
+            cross_attention
+        )
+        t = jnn.relu(t)
+        t = hk.Linear(self._config.embedding_dim)(t)
+        t = hk.dropout(hk.next_rng_key(), self._config.dropout_prob, t)
+
+        t = UTStochasticDepth(rate=self._config.stochastic_depth)(
+            t, self._config.deterministic
+        )
+        return t + h
+
+
+class UTransformerEncoder(hk.Module):
     """Transformer Encoder (Vaswani et al., 2017)."""
 
     def __init__(
         self,
         config: UniversalTransformerConfig,
         shared_embeddings_fn: Optional[Callable[[chex.Array], chex.Array]] = None,
-        name: Optional[str] = None,
     ) -> None:
-        """Initializes the transformer encoder.
-
-        Args:
-          config: The hyperparameters used in Transformer architectures.
-          shared_embeddings_fn: Embedding function that is shared with the decoder.
-          name: The name of the module.
-        """
-        super().__init__(name=name)
+        super().__init__()
         self._config = config
         self._shared_embeddings_fn = shared_embeddings_fn
 
@@ -244,85 +295,21 @@ class TransformerEncoder(hk.Module):
             encoder_block = EncoderBlock(self._config)
             h, _ = AdaptiveComputationTime(
                 self._config.ac_config,
-                encoder_block,
+                lambda h: encoder_block(h, causal_mask, pos_enc_params),
                 self._config.parameter_sharing,
-                name="act",
             )(h)
         return h
 
 
-class DecoderBlock(hk.Module):
-    def __init__(self, config, name=None):
-        super().__init__(name=name)
-        self._config = config
-
-    def __call__(self, h, encoded, causal_mask):
-        # Self-attention
-        self_attention = MultiHeadDotProductAttention(
-            num_heads=self._config.num_heads,
-            num_hiddens_per_head=self._config.num_hiddens_per_head,
-            positional_encodings=self._config.positional_encodings,
-            positional_encodings_params=self._config.positional_encodings_params,
-            attention_window=self._config.attention_window,
-        )(inputs_q=h, inputs_kv=h, mask=causal_mask, causal=True)
-        self_attention = hk.dropout(
-            hk.next_rng_key(), self._config.dropout_prob, self_attention
-        )
-
-        self_attention = UTStochasticDepth(rate=self._config.stochastic_depth)(
-            self_attention, self._config.deterministic
-        )
-        h = h + self_attention
-
-        # Cross-attention
-        self_attention = layer_norm(h)
-        cross_attention = MultiHeadDotProductAttention(
-            num_heads=self._config.num_heads,
-            num_hiddens_per_head=self._config.num_hiddens_per_head,
-            positional_encodings=self._config.positional_encodings,
-            positional_encodings_params=self._config.positional_encodings_params,
-            attention_window=self._config.attention_window,
-        )(inputs_q=self_attention, inputs_kv=encoded, causal=True)
-        cross_attention = hk.dropout(
-            hk.next_rng_key(), self._config.dropout_prob, cross_attention
-        )
-        cross_attention = UTStochasticDepth(rate=self._config.stochastic_depth)(
-            cross_attention, self._config.deterministic
-        )
-        h = h + cross_attention
-
-        # Position-wise feedforward network
-        cross_attention = layer_norm(h)
-        t = hk.Linear(self._config.embedding_dim * self._config.widening_factor)(
-            cross_attention
-        )
-        t = jnn.relu(t)
-        t = hk.Linear(self._config.embedding_dim)(t)
-        t = hk.dropout(hk.next_rng_key(), self._config.dropout_prob, t)
-
-        t = UTStochasticDepth(rate=self._config.stochastic_depth)(
-            t, self._config.deterministic
-        )
-        return t + h
-
-
-class TransformerDecoder(hk.Module):
+class UTransformerDecoder(hk.Module):
     """Transformer Decoder (Vaswani et al., 2017)."""
 
     def __init__(
         self,
         config: UniversalTransformerConfig,
         shared_embeddings_fn: Optional[Callable[[chex.Array], chex.Array]] = None,
-        name: Optional[str] = None,
     ) -> None:
-        """Initializes the Transformer decoder.
-
-        Args:
-          config: The hyperparameters used in Transformer architectures.
-          shared_embeddings_fn: Embedding function that is shared with the encoder.
-          name: The name of the module.
-        """
-        super().__init__(name=name)
+        super().__init__()
         self._config = config
         self._shared_embeddings_fn = shared_embeddings_fn
 
@@ -388,27 +375,20 @@ class TransformerDecoder(hk.Module):
                     h = decoder_block(h, encoded, causal_mask)
             return h
         else:
-            decoder_block = EncoderBlock(self._config)
+            decoder_block = DecoderBlock(self._config)
             h, _ = AdaptiveComputationTime(
                 self._config.ac_config,
-                decoder_block,
+                lambda h: decoder_block(h, encoded, causal_mask),
                 self._config.parameter_sharing,
-                name="act",
             )(h)
         return h
 
 
-class Transformer(hk.Module):
+class UTransformer(hk.Module):
     """Transformer (Vaswani et al., 2017)."""
 
-    def __init__(self, config: UniversalTransformerConfig, name: Optional[str] = None):
-        """Initializes the Transformer.
-
-        Args:
-          config: The hyperparameters used in Transformer architectures.
-          name: The name of the module.
-        """
-        super().__init__(name=name)
+    def __init__(self, config: UniversalTransformerConfig):
+        super().__init__()
         shared_embeddings_fn = None
 
         if config.share_embeddings:
@@ -416,11 +396,10 @@ class Transformer(hk.Module):
                 config.embedding_dim,
                 with_bias=False,
                 w_init=hk.initializers.TruncatedNormal(stddev=config.emb_init_scale),
-                name="shared_embeddings",
             )
 
-        self._encoder = TransformerEncoder(config, shared_embeddings_fn)
-        self._decoder = TransformerDecoder(config, shared_embeddings_fn)
+        self._encoder = UTransformerEncoder(config, shared_embeddings_fn)
+        self._decoder = UTransformerDecoder(config, shared_embeddings_fn)
 
     def __call__(self, inputs: chex.Array, targets: chex.Array) -> chex.Array:
         return self._decoder(self._encoder(inputs), targets)
@@ -471,7 +450,7 @@ def make_transformer_encoder(
     )
 
     def transformer_encoder(inputs: chex.Array) -> chex.Array:
-        output = TransformerEncoder(config)(inputs)
+        output = UTransformerEncoder(config)(inputs)
         if not return_all_outputs:
             output = output[:, -1, :]
         return hk.Linear(output_size)(output)
@@ -522,9 +501,30 @@ def make_transformer(
     )
 
     def transformer(inputs: chex.Array, targets: chex.Array) -> chex.Array:
-        output = Transformer(config)(inputs, targets)
+        output = UTransformer(config)(inputs, targets)
         if not return_all_outputs:
             output = output[:, -1, :]
         return hk.Linear(output_size)(output)
 
     return transformer
+
+
+# %%
+if __name__ == "__main__":
+
+    inputs = jnp.ones((1, 10, 10))
+    targets = jnp.ones((1, 10, 10))
+    model = make_transformer(10)
+    # print params
+    transformer = hk.transform(model)
+    params = transformer.init(jax.random.PRNGKey(42), inputs, targets)
+    print(params)
+
+    # %%
+    model = make_transformer_encoder(10)
+    transformer = hk.transform(model)
+    params = transformer.init(jax.random.PRNGKey(42), inputs)
+    out = transformer.apply(params, jax.random.PRNGKey(199), inputs)
+    print(out.shape)
+
+# %%

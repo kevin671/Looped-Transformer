@@ -75,9 +75,8 @@ class ActStep(hk.Module):
                 with_bias=True,
                 w_init=hk.initializers.Constant(0.0),
                 b_init=hk.initializers.Constant(halting_bias_init),
-                name="step_halting_prob",
             )
-            p = hk.sigmoid(halting_layer(state))
+            p = jax.nn.sigmoid(halting_layer(state))
 
             if act_level == "per_example":
                 p = jnp.mean(p, axis=1)
@@ -107,7 +106,8 @@ class ActStep(hk.Module):
         if act_level == "per_example":
             update_weights = jnp.expand_dims(update_weights, -1)
 
-        output_state = self.layer(state, *layer_call_args)
+        # output_state = self.layer(state, *layer_call_args)
+        output_state = self.layer(state)
 
         if act_type in ["basic", "random"]:
             new_state = (output_state * update_weights) + (
@@ -130,13 +130,11 @@ class ActStep(hk.Module):
 
 class ACTFunction(hk.Module):
     def __init__(self, ac_config, layer, stop_fn):
-        super().__init__(name="ACTFunction")
+        super().__init__()
         self.ac_config = ac_config
         self.layer = layer
         self.stop_fn = stop_fn
-        self.act_step = ActStep(
-            ac_config=self.ac_config, layer=self.layer, name="act_step"
-        )
+        self.act_step = ActStep(ac_config=self.ac_config, layer=self.layer)
 
     def take_a_step(self, x):
         return self.act_step(x)
@@ -144,23 +142,24 @@ class ACTFunction(hk.Module):
     def skip_a_step(self, x):
         return x
 
-    def __call__(self, x, params):
-        if params is None:
+    def __call__(self, x, _):
+        if hk.running_init():
             out = self.take_a_step(x)
         else:
             decision = self.stop_fn(x)
-            out = jax.lax.cond(
+            out = hk.cond(
                 decision,
                 lambda _: self.skip_a_step(x),
                 lambda _: self.take_a_step(x),
                 None,
             )
+
         return out, None
 
 
 class AdaptiveComputationTime(hk.Module):
     def __init__(self, ac_config, layer, share_parameters):
-        super().__init__(name="AdaptiveComputationTime")
+        super().__init__()
         self.ac_config = ac_config
         self.layer = layer
         self.share_parameters = share_parameters
@@ -198,39 +197,13 @@ class AdaptiveComputationTime(hk.Module):
             *layer_call_args,
         )
 
+        act_fn = ACTFunction(self.ac_config, self.layer, stop_fn)
+
         if self.share_parameters:
-
-            def scan_fn(carry, _):
-                (
-                    state,
-                    halting_probability,
-                    remainders,
-                    n_updates,
-                    previous_state,
-                    *layer_call_args,
-                ) = carry
-                act_fn = ACTFunction(self.ac_config, self.layer, stop_fn)
-                output, _ = act_fn(state, None)
-                return output, None
-
-            output, _ = hk.scan(scan_fn, intermedia_output, None, length=max_steps)
-
+            output, _ = hk.scan(act_fn, intermedia_output, None, length=max_steps)
         else:
 
-            def scan_fn(carry, _):
-                (
-                    state,
-                    halting_probability,
-                    remainders,
-                    n_updates,
-                    previous_state,
-                    *layer_call_args,
-                ) = carry
-                act_fn = ACTFunction(self.ac_config, self.layer, stop_fn)
-                output, _ = act_fn(state, None)
-                return output, None
-
-            output, _ = hk.scan(scan_fn, intermedia_output, None, length=max_steps)
+            raise NotImplementedError("Not implemented yet")
 
         (
             output_state,

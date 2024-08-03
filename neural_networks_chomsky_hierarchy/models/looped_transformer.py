@@ -1,3 +1,5 @@
+# %%
+# import sys
 from typing import Callable, Optional
 
 import chex
@@ -5,6 +7,7 @@ import haiku as hk
 import jax.nn as jnn
 import jax.numpy as jnp
 
+# sys.path.append("/work/gg45/g45004/Looped-Transformer/")
 from neural_networks_chomsky_hierarchy.models import (
     positional_encodings as pos_encs_lib,
 )
@@ -372,3 +375,20 @@ def make_transformer(
         return hk.Linear(output_size)(output)
 
     return transformer
+
+
+# %%
+if __name__ == "__main__":
+    import jax
+
+    inputs = jnp.ones((1, 10, 10))
+    outputs = jnp.ones((1, 10, 10))
+    model = make_transformer(10, num_layers=100)
+    # print params
+    transformer = hk.transform(model)
+    params = transformer.init(jax.random.PRNGKey(42), inputs, outputs)
+    print(params)
+
+    out = transformer.apply(params, jax.random.PRNGKey(42), inputs, outputs)
+
+# %%
