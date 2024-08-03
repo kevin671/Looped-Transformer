@@ -14,10 +14,10 @@
 # ==============================================================================
 
 """Example script to train and evaluate a network."""
-
 import haiku as hk
 import jax.numpy as jnp
 import numpy as np
+import wandb
 from absl import app, flags
 
 from neural_networks_chomsky_hierarchy.experiments import constants
@@ -68,7 +68,7 @@ _ARCHITECTURE_PARAMS = {
     # "memory_cell_size": 8,
     # "memory_size": 40,
     "embedding_dim": 64,
-    "num_layers": 5,  # 5,
+    "num_layers": 100,  # 100
 }
 
 TASK_LEVELS = {
@@ -98,9 +98,9 @@ REGULAR_TASKS = [
 
 DCF_TASKS = [
     "modular_arithmetic_brackets",
-    # "reverse_string",
-    # "stack_manipulation",
-    # "solve_equation",
+    "reverse_string",
+    "stack_manipulation",
+    "solve_equation",
 ]
 
 CS_TASKS = [
@@ -116,11 +116,14 @@ CS_TASKS = [
 GRAPH_TASKS = [
     "connectivity",
     "cycle",
+    "topological_sort",
+    "shortest_path",
+    "hamiltonian_path",
 ]
 
 _TASK_LEVEL = flags.DEFINE_string(
     "task_level",
-    default="dcf",
+    default="graph",
     help="Task level (regular, dcf, cs, graph).",
 )
 
@@ -175,13 +178,17 @@ def main(unused_argv) -> None:
 
         def accuracy_fn(output, target):
             mask = task.accuracy_mask(target)
+            print(mask)
+            print(task.accuracy_fn(output, target))
+            print(jnp.sum(mask * task.accuracy_fn(output, target)))
+            print(jnp.sum(mask))
             return jnp.sum(mask * task.accuracy_fn(output, target)) / jnp.sum(mask)
 
         # Create the final training parameters.
         training_params = training.ClassicTrainingParams(
             seed=0,
             model_init_seed=0,
-            training_steps=1_000_000,  # 1000000,10_000
+            training_steps=1,  # 1000000,10_000
             log_frequency=100,
             length_curriculum=curriculum,
             batch_size=_BATCH_SIZE.value,
@@ -191,34 +198,52 @@ def main(unused_argv) -> None:
             learning_rate=1e-3,  # 0.0005,
             accuracy_fn=accuracy_fn,
             compute_full_range_test=True,
-            max_range_test_length=_SEQUENCE_LENGTH.value,
+            max_range_test_length=1,  # _SEQUENCE_LENGTH.value,
             range_test_total_batch_size=512,
             range_test_sub_batch_size=64,
             is_autoregressive=_IS_AUTOREGRESSIVE.value,
-            wandb_project="chomsky_hierarchy",
-            wandb_name=f"{task_name}_{_ARCHITECTURE.value}",
         )
 
-        # print params
-        print(f"seed: {training_params.seed}")
-        print(f"model_init_seed: {training_params.model_init_seed}")
-        print(f"log_frequency: {training_params.log_frequency}")
-        print(f"training_steps: {training_params.training_steps}")
-        print(f"batch_size: {training_params.batch_size}")
-        print(f"learning_rate: {training_params.learning_rate}")
-        print(f"task: {task_name}")
-        print(f"model: {_ARCHITECTURE.value}")
-        print(f"is_autoregressive: {_IS_AUTOREGRESSIVE.value}")
+        run = wandb.init(
+            project="chomsky_hierarchy",
+            group=f"{_TASK_LEVEL.value}",
+            name=f"{task_name}_{_ARCHITECTURE.value}",
+            reinit=True,
+            config={
+                "seed": training_params.seed,
+                "model_init_seed": training_params.model_init_seed,
+                "task_level": _TASK_LEVEL.value,
+                "task_name": task_name,
+                "architecture": _ARCHITECTURE.value,
+                "sequence_length": _SEQUENCE_LENGTH.value,
+                "batch_size": _BATCH_SIZE.value,
+                "learning_rate": training_params.learning_rate,
+                "is_autoregressive": _IS_AUTOREGRESSIVE.value,
+                **_ARCHITECTURE_PARAMS,
+                "training_steps": training_params.training_steps,
+                "log_frequency": training_params.log_frequency,
+            },
+        )
 
         training_worker = training.TrainingWorker(training_params, use_tqdm=True)
         _, eval_results, _ = training_worker.run()
 
         # Gather results and print final score.
         accuracies = [r["accuracy"] for r in eval_results]
+
+        t = wandb.Table(
+            columns=["length", "accuracy"],
+            data=[[r["length"], r["accuracy"]] for r in eval_results],
+        )
+        run.log({"range_evaluation": t})
+
         # score = np.mean(accuracies[_SEQUENCE_LENGTH.value + 1 :])
         score = np.mean(accuracies[: _SEQUENCE_LENGTH.value + 1])
         # print(f"Network score: {score}")
+        # wandb.log({"score": score})
         print(f"Task: {task_name}, Network score: {score}")
+
+        run.finish()
 
 
 if __name__ == "__main__":

@@ -11,8 +11,8 @@ from neural_networks_chomsky_hierarchy.tasks.graph.base import GeneratorBase
 
 
 class Generator(GeneratorBase):
-    def __init__(self, num_of_nodes=10, edge_probability=0.35):
-        super().__init__(num_of_nodes, edge_probability)
+    def __init__(self, num_of_nodes=10, edge_probability=0.35, max_length=100):
+        super().__init__(num_of_nodes, edge_probability, max_length)
 
     def generate(self, n=1):
         inputs = jnp.full((n, self.max_length), -1)
@@ -83,15 +83,20 @@ class TopologicalSort(task.GeneralizationTask):
         """Returns the output zsize for the models."""
         return self._n_node
 
+    def output_length(self, input_length: int) -> int:
+        """Returns the output length for a given input length."""
+        del input_length
+        return self._n_node
+
 
 # %%
 
 if __name__ == "__main__":
     c = TopologicalSort()
     out = c.sample_batch(jnp.array([0]), 1000, 10)
-    inputs, outputs = out["input"], out["output"]  # (1000, 45, 12) (1000, 1, 2)
-    print(outputs[0])
+    inputs, outputs = out["input"], out["output"]  # (1000, 180, 12) (1000, 10, 10)
+    print(inputs.shape, outputs.shape)
     # print rate of 1 in outputs
-    print(jnp.mean(outputs[:, 0, 1]))
+    print(jnp.mean(outputs[:, 1]))
 
 # %%

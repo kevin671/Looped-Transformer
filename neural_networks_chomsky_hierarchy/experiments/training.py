@@ -177,12 +177,6 @@ class TrainingWorker:
         self._training_params = training_params
         self._use_tqdm = use_tqdm
 
-        wandb.init(
-            project=training_params.wandb_project,
-            name=training_params.wandb_name,
-            config=training_params,
-        )
-
     def run(
         self,
     ) -> tuple[

@@ -94,6 +94,11 @@ class ShortestPath(task.GeneralizationTask):
         # TODO: add the path length
         return self._n_node
 
+    def output_length(self, input_length: int) -> int:
+        """Returns the output length for a given input length."""
+        del input_length
+        return self._n_node
+
 
 # %%
 

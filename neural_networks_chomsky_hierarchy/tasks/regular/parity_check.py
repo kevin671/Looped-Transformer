@@ -13,6 +13,7 @@
 # limitations under the License.
 # ==============================================================================
 
+# %%
 """Compute whether the number of 1s in a string is even."""
 
 import functools
@@ -22,7 +23,10 @@ import jax.nn as jnn
 import jax.numpy as jnp
 import jax.random as jrandom
 
+# sys.path.append("/work/gg45/g45004/Looped-Transformer")
 from neural_networks_chomsky_hierarchy.tasks import task
+
+# import sys
 
 
 class ParityCheck(task.GeneralizationTask):
@@ -45,8 +49,8 @@ class ParityCheck(task.GeneralizationTask):
         """Returns a batch of strings and the expected class."""
         strings = jrandom.randint(rng, shape=(batch_size, length), minval=0, maxval=2)
         n_b = jnp.sum(strings, axis=1) % 2
-        n_b = jnn.one_hot(n_b, num_classes=2)
-        one_hot_strings = jnn.one_hot(strings, num_classes=2)
+        n_b = jnn.one_hot(n_b, num_classes=2)  # (batch_size, 2)
+        one_hot_strings = jnn.one_hot(strings, num_classes=2)  # (batch_size, length, 2)
         return {"input": one_hot_strings, "output": n_b}
 
     @property
@@ -58,3 +62,14 @@ class ParityCheck(task.GeneralizationTask):
     def output_size(self) -> int:
         """Returns the output size for the models."""
         return 2
+
+
+# %%
+if __name__ == "__main__":
+    p = ParityCheck()
+    rng = jrandom.PRNGKey(0)
+    batch = p.sample_batch(rng, 5, 10)
+    print(batch["input"].shape, batch["output"].shape)  # (5, 10, 2) (5, 2)
+    print(batch["input"][0], batch["output"][0])
+
+# %%

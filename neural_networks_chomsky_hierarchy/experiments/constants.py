@@ -43,6 +43,9 @@ from neural_networks_chomsky_hierarchy.tasks.regular import modular_arithmetic
 from neural_networks_chomsky_hierarchy.tasks.regular import parity_check
 from neural_networks_chomsky_hierarchy.tasks.graph import connectivity
 from neural_networks_chomsky_hierarchy.tasks.graph import cycle
+from neural_networks_chomsky_hierarchy.tasks.graph import topological_sort
+from neural_networks_chomsky_hierarchy.tasks.graph import shortest_path
+from neural_networks_chomsky_hierarchy.tasks.graph import hamiltonian_path
 
 MODEL_BUILDERS = {
     "rnn": functools.partial(rnn.make_rnn, rnn_core=hk.VanillaRNN),
@@ -94,6 +97,9 @@ TASK_BUILDERS = {
     "bucket_sort": bucket_sort.BucketSort,
     "connectivity": connectivity.Connectivity,
     "cycle": cycle.Cycle,
+    "topological_sort": topological_sort.TopologicalSort,
+    "shortest_path": shortest_path.ShortestPath,
+    "hamiltonian_path": hamiltonian_path.HamiltonPath,
 }
 
 TASK_LEVELS = {

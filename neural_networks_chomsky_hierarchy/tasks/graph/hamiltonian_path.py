@@ -39,7 +39,7 @@ class Generator(GeneratorBase):
 
     def generate(self, n=1):
         inputs = jnp.full((n, self.max_length), -1)
-        outputs = jnp.zeros((n, 1))
+        outputs = jnp.zeros((n))
 
         for i in range(n):
             G = self.generate_graph()
@@ -51,9 +51,9 @@ class Generator(GeneratorBase):
 
             # Determine the output based on the presence of a cycle
             if hamilton(G):
-                outputs = outputs.at[i, 0].set(1)
+                outputs = outputs.at[i].set(1)
             else:
-                outputs = outputs.at[i, 0].set(0)
+                outputs = outputs.at[i].set(0)
 
         return inputs, outputs
 
@@ -108,8 +108,8 @@ if __name__ == "__main__":
     c = HamiltonPath()
     out = c.sample_batch(jnp.array([0]), 1000, 10)
     inputs, outputs = out["input"], out["output"]  # (1000, 45, 12) (1000, 1, 2)
-    print(inputs[0])
+    print(inputs.shape, outputs.shape)
     # print rate of 1 in outputs
-    print(jnp.mean(outputs[:, 0, 1]))
+    print(jnp.mean(outputs[:, 0]))
 
 # %%
