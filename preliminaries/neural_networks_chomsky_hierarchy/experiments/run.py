@@ -19,7 +19,6 @@ import jax.numpy as jnp
 import numpy as np
 import wandb
 from absl import app, flags
-
 from neural_networks_chomsky_hierarchy.experiments import constants
 from neural_networks_chomsky_hierarchy.experiments import curriculum as curriculum_lib
 from neural_networks_chomsky_hierarchy.experiments import training, utils
@@ -43,7 +42,7 @@ _TASK = flags.DEFINE_string(
 )
 _ARCHITECTURE = flags.DEFINE_string(
     "architecture",
-    default="transformer_encoder",  # "tape_rnn", "looped_transformer", "transformer_encoder", "looped_transformer_encoder"
+    default="looped_transformer_encoder",  # "tape_rnn", "transformer_encoder", "looped_transformer_encoder"
     help="Model architecture (see `constants.py` for other architectures).",
 )
 
@@ -68,7 +67,10 @@ _ARCHITECTURE_PARAMS = {
     # "memory_cell_size": 8,
     # "memory_size": 40,
     "embedding_dim": 64,
-    "num_layers": 100,  # 100
+    "num_layers": 2,
+    "use_input_injections": True,
+    "num_loops": 100,
+    "num_truncated": 0,  # 10
 }
 
 TASK_LEVELS = {
@@ -185,17 +187,17 @@ def main(unused_argv) -> None:
         training_params = training.ClassicTrainingParams(
             seed=0,
             model_init_seed=0,
-            training_steps=1000000,  # 1000000,10_000
+            training_steps=10_000,  # 1000000,10_000
             log_frequency=100,
             length_curriculum=curriculum,
             batch_size=_BATCH_SIZE.value,
             task=task,
             model=model,
             loss_fn=loss_fn,
-            learning_rate=1e-3,  # 0.0005,
+            learning_rate=0.0005,  # 0.0005,1e-3
             accuracy_fn=accuracy_fn,
             compute_full_range_test=True,
-            max_range_test_length=100,  # _SEQUENCE_LENGTH.value,
+            max_range_test_length=1,  # _SEQUENCE_LENGTH.value,
             range_test_total_batch_size=512,
             range_test_sub_batch_size=64,
             is_autoregressive=_IS_AUTOREGRESSIVE.value,

@@ -1,5 +1,5 @@
 # %%
-# import sys
+import sys
 from typing import Callable, Optional
 
 import chex
@@ -7,16 +7,51 @@ import haiku as hk
 import jax.nn as jnn
 import jax.numpy as jnp
 
-# sys.path.append("/work/gg45/g45004/Looped-Transformer/")
+sys.path.append("/work/gg45/g45004/Looped-Transformer/preliminaries")
+import dataclasses
+
 from neural_networks_chomsky_hierarchy.models import (
     positional_encodings as pos_encs_lib,
 )
 from neural_networks_chomsky_hierarchy.models.transformer import (
     MultiHeadDotProductAttention,
-    TransformerConfig,
     layer_norm,
     shift_right,
 )
+
+
+@chex.dataclass
+class LoopedTransformerConfig:
+    """Hyperparameters used in the Transformer architectures."""
+
+    output_size: int
+    embedding_dim: int = 64
+    num_layers: int = 1  # 2
+    num_heads: int = 8
+    num_hiddens_per_head: Optional[int] = None
+    dropout_prob: float = 0.1
+    emb_init_scale: float = 0.02
+    use_embeddings: bool = True
+    share_embeddings: bool = False
+    attention_window: Optional[int] = None
+    positional_encodings: pos_encs_lib.PositionalEncodings = dataclasses.field(
+        default_factory=lambda: pos_encs_lib.PositionalEncodings.SIN_COS
+    )
+    max_time: int = 10_000
+    positional_encodings_params: pos_encs_lib.PositionalEncodingsParams = (
+        dataclasses.field(default_factory=pos_encs_lib.SinCosParams)
+    )
+    widening_factor: int = 4
+    causal_masking: bool = False
+
+    use_input_injections: bool = True
+    num_loops: int = 100
+    num_truncated: int = 0  # 10
+
+    def __post_init__(self) -> None:
+        """Sets `num_hiddens_per_head` if it is `None`."""
+        if self.num_hiddens_per_head is None:
+            self.num_hiddens_per_head = self.embedding_dim // self.num_heads
 
 
 class EncoderBlock(hk.Module):
@@ -25,39 +60,42 @@ class EncoderBlock(hk.Module):
         self._config = config
 
     def __call__(self, h, causal_mask, pos_enc_params):
-        attention = MultiHeadDotProductAttention(
-            num_heads=self._config.num_heads,
-            num_hiddens_per_head=self._config.num_hiddens_per_head,
-            positional_encodings=self._config.positional_encodings,
-            positional_encodings_params=pos_enc_params,
-            attention_window=self._config.attention_window,
-        )(
-            inputs_q=h,
-            inputs_kv=h,
-            mask=causal_mask,
-            causal=self._config.causal_masking,
-        )
-        attention = hk.dropout(hk.next_rng_key(), self._config.dropout_prob, attention)
-        attention = layer_norm(h + attention)
+        for _ in range(self._config.num_layers):
+            attention = MultiHeadDotProductAttention(
+                num_heads=self._config.num_heads,
+                num_hiddens_per_head=self._config.num_hiddens_per_head,
+                positional_encodings=self._config.positional_encodings,
+                positional_encodings_params=pos_enc_params,
+                attention_window=self._config.attention_window,
+            )(
+                inputs_q=h,
+                inputs_kv=h,
+                mask=causal_mask,
+                causal=self._config.causal_masking,
+            )
+            attention = hk.dropout(
+                hk.next_rng_key(), self._config.dropout_prob, attention
+            )
+            attention = layer_norm(h + attention)
 
-        # Position-wise feedforward network.
-        h = hk.Linear(self._config.embedding_dim * self._config.widening_factor)(
-            attention
-        )
-        h = jnn.relu(h)
-        h = hk.Linear(self._config.embedding_dim)(h)
+            # Position-wise feedforward network.
+            h = hk.Linear(self._config.embedding_dim * self._config.widening_factor)(
+                attention
+            )
+            h = jnn.relu(h)
+            h = hk.Linear(self._config.embedding_dim)(h)
 
-        h = hk.dropout(hk.next_rng_key(), self._config.dropout_prob, h)
-        h = layer_norm(h + attention)
+            h = hk.dropout(hk.next_rng_key(), self._config.dropout_prob, h)
+            h = layer_norm(h + attention)
         return h
 
 
-class TransformerEncoder(hk.Module):
+class LoopedTransformerEncoder(hk.Module):
     """Transformer Encoder (Vaswani et al., 2017)."""
 
     def __init__(
         self,
-        config: TransformerConfig,
+        config: LoopedTransformerConfig,
         shared_embeddings_fn: Optional[Callable[[chex.Array], chex.Array]] = None,
         name: Optional[str] = None,
     ) -> None:
@@ -113,6 +151,8 @@ class TransformerEncoder(hk.Module):
         else:
             h = embeddings
 
+        inputs = h
+
         # The causal mask is shared across heads.
         if self._config.causal_masking:
             causal_mask = jnp.tril(
@@ -122,8 +162,20 @@ class TransformerEncoder(hk.Module):
             causal_mask = None
 
         encoder_block = EncoderBlock(self._config)
-        for _ in range(self._config.num_layers):
-            h = encoder_block(h, causal_mask, pos_enc_params)
+
+        for i in range(self._config.num_loops):
+            if i < self._config.num_truncated:
+                if self._config.use_input_injections:
+                    h = encoder_block(h + inputs, causal_mask, pos_enc_params)
+                else:
+                    h = encoder_block(h, causal_mask, pos_enc_params)
+                h = jax.lax.stop_gradient(h)
+            else:
+                if self._config.use_input_injections:
+                    h = encoder_block(h + inputs, causal_mask, pos_enc_params)
+                else:
+                    h = encoder_block(h, causal_mask, pos_enc_params)
+
         return h
 
 
@@ -176,7 +228,7 @@ class TransformerDecoder(hk.Module):
 
     def __init__(
         self,
-        config: TransformerConfig,
+        config: LoopedTransformerConfig,
         shared_embeddings_fn: Optional[Callable[[chex.Array], chex.Array]] = None,
         name: Optional[str] = None,
     ) -> None:
@@ -252,7 +304,7 @@ class TransformerDecoder(hk.Module):
 class Transformer(hk.Module):
     """Transformer (Vaswani et al., 2017)."""
 
-    def __init__(self, config: TransformerConfig, name: Optional[str] = None):
+    def __init__(self, config: LoopedTransformerConfig, name: Optional[str] = None):
         """Initializes the Transformer.
 
         Args:
@@ -270,7 +322,7 @@ class Transformer(hk.Module):
                 name="shared_embeddings",
             )
 
-        self._encoder = TransformerEncoder(config, shared_embeddings_fn)
+        self._encoder = LoopedTransformerEncoder(config, shared_embeddings_fn)
         self._decoder = TransformerDecoder(config, shared_embeddings_fn)
 
     def __call__(self, inputs: chex.Array, targets: chex.Array) -> chex.Array:
@@ -295,6 +347,9 @@ def make_transformer_encoder(
     widening_factor: int = 4,
     return_all_outputs: bool = False,
     causal_masking: bool = False,
+    use_input_injections: bool = True,
+    num_loops: int = 100,
+    num_truncated: int = 0,
 ) -> Callable[[chex.Array], chex.Array]:
     """Returns a transformer encoder model."""
     if positional_encodings is None:
@@ -302,7 +357,7 @@ def make_transformer_encoder(
         positional_encodings_params = pos_encs_lib.SinCosParams()
     elif positional_encodings_params is None:
         raise ValueError("No parameters for positional encodings are passed.")
-    config = TransformerConfig(
+    config = LoopedTransformerConfig(
         output_size=output_size,
         embedding_dim=embedding_dim,
         num_layers=num_layers,
@@ -317,10 +372,13 @@ def make_transformer_encoder(
         positional_encodings_params=positional_encodings_params,
         widening_factor=widening_factor,
         causal_masking=causal_masking,
+        use_input_injections=use_input_injections,
+        num_loops=num_loops,
+        num_truncated=num_truncated,
     )
 
     def transformer_encoder(inputs: chex.Array) -> chex.Array:
-        output = TransformerEncoder(config)(inputs)
+        output = LoopedTransformerEncoder(config)(inputs)
         if not return_all_outputs:
             output = output[:, -1, :]
         return hk.Linear(output_size)(output)
@@ -352,7 +410,7 @@ def make_transformer(
         positional_encodings_params = pos_encs_lib.SinCosParams()
     elif positional_encodings_params is None:
         raise ValueError("No parameters for positional encodings are passed.")
-    config = TransformerConfig(
+    config = LoopedTransformerConfig(
         output_size=output_size,
         embedding_dim=embedding_dim,
         num_layers=num_layers,
@@ -383,12 +441,11 @@ if __name__ == "__main__":
 
     inputs = jnp.ones((1, 10, 10))
     outputs = jnp.ones((1, 10, 10))
-    model = make_transformer(10, num_layers=100)
+    model = make_transformer_encoder(10, num_layers=1)
     # print params
     transformer = hk.transform(model)
-    params = transformer.init(jax.random.PRNGKey(42), inputs, outputs)
-    print(params)
-
-    out = transformer.apply(params, jax.random.PRNGKey(42), inputs, outputs)
+    params = transformer.init(jax.random.PRNGKey(42), inputs)
+    out = transformer.apply(params, jax.random.PRNGKey(42), inputs)
+    print(out.shape)
 
 # %%
