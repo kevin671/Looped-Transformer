@@ -2,6 +2,7 @@
 # import sys
 from random import shuffle
 
+import chex
 import jax.nn as jnn
 import jax.numpy as jnp
 import networkx as nx
@@ -14,10 +15,11 @@ from neural_networks_chomsky_hierarchy.tasks.graph.base import GeneratorBase
 class Generator(GeneratorBase):
     def __init__(self, num_of_nodes=10, edge_probability=0.35, max_length=100):
         super().__init__(num_of_nodes, edge_probability, max_length)
+        self.terminate_token = num_of_nodes
 
     def generate(self, n=1):
         inputs = jnp.full((n, self.max_length), -1)
-        outputs = jnp.full((n, self.num_of_nodes), -1)
+        outputs = jnp.full((n, self.num_of_nodes), 0)
 
         for i in range(n):
             G = self.generate_weighted_graph()
@@ -40,8 +42,19 @@ class Generator(GeneratorBase):
                             outputs = outputs.at[i, : len(shortest_path)].set(
                                 shortest_path
                             )
+                            if len(shortest_path) < self.num_of_nodes:
+                                outputs = outputs.at[i, len(shortest_path)].set(
+                                    self.terminate_token
+                                )
+                            else:
+                                outputs = outputs.at[i, -1].set(self.terminate_token)
+                            break
+                    if outputs[i, 0] >= 0:
+                        break
+                if outputs[i, 0] >= 0:
+                    break
 
-                            return inputs, outputs
+        return inputs, outputs
 
 
 # g = Generator()
@@ -92,22 +105,43 @@ class ShortestPath(task.GeneralizationTask):
     def output_size(self) -> int:
         """Returns the output zsize for the models."""
         # TODO: add the path length
-        return self._n_node
+        # padd with termination token
+        return self._n_node + 1
 
     def output_length(self, input_length: int) -> int:
         """Returns the output length for a given input length."""
         del input_length
         return self._n_node
 
+    def accuracy_mask(self, target: chex.Array) -> chex.Array:
+        """Computes a mask that ignores everything after the termination token.
+
+        Args:
+          target: Target tokens of shape `(batch_size, output_length, output_size)`.
+
+        Returns:
+          The mask of shape `(batch_size, output_length)`.
+        """
+        batch_size, length, _ = target.shape
+        termination_indices = jnp.argmax(
+            jnp.argmax(target, axis=-1),
+            axis=-1,
+            keepdims=True,
+        )
+        indices = jnp.tile(jnp.arange(length), (batch_size, 1))
+        return indices <= termination_indices
+
 
 # %%
 
 if __name__ == "__main__":
     c = ShortestPath()
-    out = c.sample_batch(jnp.array([0]), 1000, 10)
+    out = c.sample_batch(jnp.array([0]), 5, 10)
     inputs, outputs = out["input"], out["output"]  # (1000, 183, 13) (1000, 10, 10)
-    print(inputs.shape, outputs.shape)
-    print(inputs[0, 100:])
-    print(outputs[0])
+    print(inputs.shape, outputs.shape)  # (5, 183, 13) (5, 10, 11)
+    # print(inputs[0, 100:])
+    # print(outputs[0])
+    mask = c.accuracy_mask(outputs)
+    print(mask)  # (5, 10)
 
 # %%

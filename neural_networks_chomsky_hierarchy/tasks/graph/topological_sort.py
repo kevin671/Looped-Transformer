@@ -23,15 +23,15 @@ class Generator(GeneratorBase):
                 G = self.generate_directed_graph()
                 if nx.is_directed_acyclic_graph(G):
                     graph_array = self.to_jnp_array(G)
-
                     # Ensure the input graph array fits into the preallocated space
                     length = min(graph_array.size, self.max_length)
                     inputs = inputs.at[i, :length].set(graph_array[:length])
                     sorted_nodes = list(nx.topological_sort(G))
 
                     outputs = outputs.at[i, :].set(sorted_nodes)
+                    break
 
-                    return inputs, outputs
+        return inputs, outputs
 
 
 # g = Generator()
@@ -93,7 +93,7 @@ class TopologicalSort(task.GeneralizationTask):
 
 if __name__ == "__main__":
     c = TopologicalSort()
-    out = c.sample_batch(jnp.array([0]), 1000, 10)
+    out = c.sample_batch(jnp.array([0]), 3, 10)
     inputs, outputs = out["input"], out["output"]  # (1000, 180, 12) (1000, 10, 10)
     print(inputs.shape, outputs.shape)
     # print rate of 1 in outputs

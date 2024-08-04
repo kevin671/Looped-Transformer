@@ -178,17 +178,14 @@ def main(unused_argv) -> None:
 
         def accuracy_fn(output, target):
             mask = task.accuracy_mask(target)
-            print(mask)
-            print(task.accuracy_fn(output, target))
-            print(jnp.sum(mask * task.accuracy_fn(output, target)))
-            print(jnp.sum(mask))
+            # print(f"{output.shape=}, {target.shape=}, {mask.shape=}")
             return jnp.sum(mask * task.accuracy_fn(output, target)) / jnp.sum(mask)
 
         # Create the final training parameters.
         training_params = training.ClassicTrainingParams(
             seed=0,
             model_init_seed=0,
-            training_steps=1,  # 1000000,10_000
+            training_steps=1000000,  # 1000000,10_000
             log_frequency=100,
             length_curriculum=curriculum,
             batch_size=_BATCH_SIZE.value,
@@ -198,7 +195,7 @@ def main(unused_argv) -> None:
             learning_rate=1e-3,  # 0.0005,
             accuracy_fn=accuracy_fn,
             compute_full_range_test=True,
-            max_range_test_length=1,  # _SEQUENCE_LENGTH.value,
+            max_range_test_length=100,  # _SEQUENCE_LENGTH.value,
             range_test_total_batch_size=512,
             range_test_sub_batch_size=64,
             is_autoregressive=_IS_AUTOREGRESSIVE.value,

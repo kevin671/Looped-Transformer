@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-
+# %%
 """Multiply two binary numbers."""
 
 import random
@@ -122,6 +122,8 @@ class BinaryMultiplication(task.GeneralizationTask):
         expressions = jnp.array(expressions, dtype=jnp.int32)
         results = jnp.array(results, dtype=jnp.int32)
 
+        print(results)
+
         return {
             "input": jnn.one_hot(expressions, self.input_size),
             "output": jnn.one_hot(results, self.output_size),
@@ -157,3 +159,16 @@ class BinaryMultiplication(task.GeneralizationTask):
         )
         indices = jnp.tile(jnp.arange(length), (batch_size, 1))
         return indices <= termination_indices
+
+
+# %%
+if __name__ == "__main__":
+    c = BinaryMultiplication()
+    out = c.sample_batch(jnp.array([0]), 5, 10)
+    inputs = out["input"]
+    outputs = out["output"]
+    print(inputs.shape, outputs.shape)  # (5, 10, 3) (5, 10, 3)
+    mask = c.accuracy_mask(outputs)
+    print(mask)  # (5, 10)
+
+# %%
