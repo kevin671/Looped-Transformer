@@ -25,7 +25,7 @@ class LayerNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(ndim))
         self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
 
-    def forward(self, input):
+    def forward(self, input, i_layer=None):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
 
@@ -58,7 +58,7 @@ class CausalSelfAttention(nn.Module):
                 ),
             )
 
-    def forward(self, x):
+    def forward(self, x, i_layer=None):
         B, T, C = (
             x.size()
         )  # batch size, sequence length, embedding dimensionality (n_embd)
@@ -111,7 +111,7 @@ class MLP(nn.Module):
         self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
 
-    def forward(self, x):
+    def forward(self, x, i_layer=None):
         x = self.c_fc(x)
         x = self.gelu(x)
         x = self.c_proj(x)

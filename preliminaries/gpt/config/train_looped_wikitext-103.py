@@ -5,11 +5,11 @@ import uuid
 
 init_from = "looped_gpt"
 
-n_loops = 1
-n_layer = 3
-n_head = 12
-n_embd = 768
-input_injection = False
+n_loops = 12  # 100
+n_layer = 1
+n_head = 16
+n_embd = 2048
+use_input_injection = True
 
 unique_suffix = uuid.uuid4().hex[:4]  # ランダムな8文字の文字列を生成
 

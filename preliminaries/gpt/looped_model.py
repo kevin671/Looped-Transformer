@@ -23,7 +23,9 @@ class LoopedGPTConfig:
     bias: bool = (
         False  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     )
-    input_injection: bool = False
+    use_input_injection: bool = False
+    n_truncated: int = 100  # 10
+    t_dim: int = 320
 
 
 class LoopedGPT(GPTBase):
@@ -64,7 +66,7 @@ class LoopedGPT(GPTBase):
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
 
-    def forward(self, idx, targets=None, debug=False):
+    def forward(self, idx, targets=None):
         device = idx.device
         b, t = idx.size()
         assert (
@@ -78,180 +80,20 @@ class LoopedGPT(GPTBase):
         input_emb = tok_emb + pos_emb
         x = self.transformer.drop(input_emb)
 
-        debug_data = []
-        for _ in range(self.n_loops):
-            for block in self.transformer.h:
-                if self.config.input_injection:
-                    x = block(x + input_emb)
-                else:
-                    x = block(x)
-                if debug:
-                    print(x[0, 0, :10])
-                    # print(x.shape)  # torch.Size([2, 1024, 768])
-                    x = self.transformer.ln_f(x)
-                    logits = self.lm_head(x)
-                    loss = F.cross_entropy(
-                        logits.view(-1, logits.size(-1)),
-                        targets.view(-1),
-                        ignore_index=-1,
-                    )
-                    # print(logits.shape)  # torch.Size([2, 1024, 50257])
-                    # print(torch.argmax(logits, dim=-1).shape)  # torch.Size([2, 1024])
-                    debug_data.append(loss.detach().cpu())
-
-        x = self.transformer.ln_f(x)
-
-        if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
-            loss = F.cross_entropy(
-                logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
-            )
-        else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(
-                x[:, [-1], :]
-            )  # note: using list [-1] to preserve the time dim
-            loss = None
-
-        if debug:
-            return logits, loss, debug_data
-
-        return logits, loss
-
-    @torch.no_grad()
-    def picard_forward(
-        self,
-        idx,
-        targets=None,
-        parallel: int = 100,
-        tolerance: float = 1e-3,
-    ):
-        device = idx.device
-        b, t = idx.size()
-        assert (
-            t <= self.config.block_size
-        ), f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=device)  # shape (t)
-
-        # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (t, n_embd)
-        x = self.transformer.drop(tok_emb + pos_emb)
-
-        # Picard iteration alogrithm
-        assert self.config.n_layer == 1, "n_layer must be 1"
-
-        device = x.device
-        batch_size, seq_len, hidden_dim = x.shape
-
-        assert batch_size == 1, "batch size must be 1"
-
-        stats_pass_count = 0
-        stats_flop_count = 0
-
-        # timesteps = torch.arange(
-        #    0, num_loops * len(self.transformer.looped_block.layers), device=device
-        # )
-        timesteps = torch.arange(0, self.n_loops, device=device)
-        parallel = min(parallel, len(timesteps))
-
-        begin_idx = 0
-        end_idx = parallel
-        latents_time_evolution_buffer = torch.stack([x] * (len(timesteps) + 1))
-
-        scaled_tolerance = tolerance**2
-
-        # start = torch.cuda.Event(enable_timing=True)
-        # end = torch.cuda.Event(enable_timing=True)
-
-        # start.record()
-
-        while begin_idx < len(timesteps):
-            print(f"{begin_idx=}, {end_idx=}", flush=True)
-            parallel_len = end_idx - begin_idx
-
-            block_latents = latents_time_evolution_buffer[begin_idx:end_idx]
-            t_vec = timesteps[begin_idx:end_idx]
-
-            # if add_inputs_embeds:
-            #    # num_layers間隔でinputs_embedsを足す
-            #    block_latents[:: len(self.layers)] += inputs_embeds
-
-            model_output = torch.zeros_like(block_latents)
-            for i, t in enumerate(t_vec):
-                # model_output[i] = self.transformer.looped_block(block_latents[i], t)
-                model_output[i] = self.transformer.h[0].derivative(block_latents[i])
-
-            delta = model_output.reshape(parallel_len, 1, seq_len, hidden_dim)
-            cumulative_delta = torch.cumsum(delta, dim=0)
-            # print(f"{cumulative_delta.shape=}", flush=True)
-
-            block_latents_new = (
-                latents_time_evolution_buffer[begin_idx][None,] + cumulative_delta
-            )  # (parallel_len, seq_len, hidden_dim)
-            cur_error_vec = (
-                block_latents_new - block_latents
-            )  # (parallel_len, 1, seq_len, hidden_dim)
-            cur_error = (
-                torch.linalg.norm(cur_error_vec, dim=-1).pow(2).mean(dim=-1).squeeze(1)
-            )  # (parallel_len,)
-
-            print(f"{cur_error=}", flush=True)
-            # find the first index of the vector error_ratio that is greater than error tolerance
-            # we can shift the window for the next iteration up to this index
-
-            # pad with a large number at last to avoid the case where all errors are below tolerance
-            cur_error = torch.cat(
-                [
-                    cur_error,
-                    torch.tensor(
-                        [
-                            1e6,
-                        ],
-                        device=device,
-                    ),
-                ]
-            )
-            ind = torch.argmax((cur_error > scaled_tolerance).int()).item()
-
-            # compute the new begin and end idxs for the window
-            new_begin_idx = begin_idx + min(1 + ind, parallel)
-            new_end_idx = min(new_begin_idx + parallel, len(timesteps))
-
-            # store the computed latents for the current window in the global buffer
-            latents_time_evolution_buffer[begin_idx + 1 : end_idx + 1] = (
-                block_latents_new
-            )
-            # initialize the new sliding window latents with the end of the current window,
-            # should be better than random initialization
-            latents_time_evolution_buffer[
-                end_idx : new_end_idx + 1
-            ] = latents_time_evolution_buffer[end_idx][
-                None,
-            ]
-
-            begin_idx = new_begin_idx
-            end_idx = new_end_idx
-
-            stats_pass_count += 1
-            stats_flop_count += parallel_len
-
-        x = latents_time_evolution_buffer[-1]
-
-        # end.record()
-
-        # Waits for everything to finish running
-        # torch.cuda.synchronize()
-
-        # print(f"elapsed time: {start.elapsed_time(end)} ms")
-
-        stats = {
-            "pass_count": stats_pass_count,
-            "flops_count": stats_flop_count,
-            # "time": start.elapsed_time(end),
-        }
-        print(stats)
+        for idx in range(self.n_loops):
+            if idx < self.n_loops - self.config.n_truncated:
+                with torch.no_grad():
+                    for block in self.transformer.h:
+                        if self.config.use_input_injection:
+                            x = block(x + input_emb)
+                        else:
+                            x = block(x)
+            else:
+                for block in self.transformer.h:
+                    if self.config.use_input_injection:
+                        x = block(x + input_emb)
+                    else:
+                        x = block(x)
 
         x = self.transformer.ln_f(x)
 
@@ -279,7 +121,9 @@ if __name__ == "__main__":
 
     device = "cpu"
     device_type = "cpu"
-    data_dir = "/work/gg45/g45004/Looped-Transformer/nanoGPT/data/wikitext-103"
+    data_dir = (
+        "/work/gg45/g45004/Looped-Transformer/preliminaries/gpt/data/wikitext-103"
+    )
 
     def get_batch(split="train", batch_size=10, block_size=1024):
         # We recreate np.memmap every batch to avoid a memory leak, as per
@@ -314,6 +158,7 @@ if __name__ == "__main__":
     config = LoopedGPTConfig(n_loops=200)
     model = LoopedGPT(config)
 
+    """
     ckpt = torch.load(
         "/work/gg45/g45004/Looped-Transformer/nanoGPT/out/looped_1_layer_200_loop_wikitext-103/ckpt.pt",
         map_location="cpu",
@@ -324,28 +169,12 @@ if __name__ == "__main__":
         if k.startswith(unwanted_prefix):
             state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
     model.load_state_dict(state_dict)
+    """
 
     x, y = get_batch("train")
     # print(x.shape, y.shape)  # torch.Size([2, 1024]) torch.Size([2, 1024])
     # print(x, y)
     # input = torch.randint(0, 50257, (1, 12))
-    output, _, debugs = model(x, y, debug=True)
-    # print(output[0])  # torch.Size([1, 50257])
-    # print(len(debugs))  # 200
-    # print(debugs[0].shape)  # torch.Size([1, 12, 768])
-
-    # print(debugs)
-
-    # show the norm of the tensor at each loop
-    # norms = [torch.linalg.norm(d).item() for d in debugs]
-    # print as figure
-    import matplotlib.pyplot as plt
-
-    plt.plot(debugs)
-    # plt.xlabel("n_loops")
-    # plt.ylabel("Norm")
-    # plt.title("Norms of the tensor at each loop")
-    plt.show()
-    # output = model.picard_forward(input)
+    output, _ = model(x, y)
 
 # %%

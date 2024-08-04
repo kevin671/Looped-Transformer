@@ -25,9 +25,13 @@ from contextlib import nullcontext
 import numpy as np
 import torch
 from dynamic_looped_model import DynamicLoopedGPT, DynamicLoopedGPTConfig
+
+# from hyper_gpt import EmbeddingLoopedGPT
 from hyper_gpt import HyperGPT, HyperGPTConfig
 from looped_model import LoopedGPT, LoopedGPTConfig
 from model import GPT, GPTConfig
+
+# from scale_hypergpt import HyperGPT, HyperGPTConfig
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tying_transformer import WeightTyingGPT, WeightTyingGPTConfig
@@ -59,11 +63,14 @@ n_head = 12
 n_embd = 768
 dropout = 0.0  # for pretraining 0 is good, for finetuning try 0.1+
 bias = False  # do we use bias inside LayerNorm and Linear layers?
-input_injection = False
+use_input_injection = False
 share_attn = False
 share_mlp = False
 hyper_size = 256
 n_z = 64
+t_dim = 160
+hypernet_dim = 384
+n_truncated = 10
 # adamw optimizer
 learning_rate = 6e-4  # max learning rate
 max_iters = 600000  # total number of training iterations
@@ -216,12 +223,14 @@ elif init_from == "looped_gpt":
         bias=bias,
         vocab_size=None,
         dropout=dropout,
-        input_injection=input_injection,
+        use_input_injection=use_input_injection,
     )
     print("Initializing a new LoopedGPT model from scratch")
     model_args["vocab_size"] = meta_vocab_size if meta_vocab_size is not None else 50304
     gptconf = LoopedGPTConfig(**model_args)
     model = LoopedGPT(gptconf)
+    # model = EmbeddingLoopedGPT(gptconf)
+
 elif init_from == "dynamic_looped_gpt":
     model_args = dict(
         n_loops=n_loops,
@@ -259,12 +268,14 @@ elif init_from == "hyper_gpt":
         n_layer=n_layer,
         n_head=n_head,
         n_embd=n_embd,
+        n_loops=n_loops,
         block_size=block_size,
         bias=bias,
         vocab_size=None,
         dropout=dropout,
-        hyper_size=hyper_size,
-        n_z=n_z,
+        t_dim=t_dim,
+        hypernet_dim=hypernet_dim,
+        n_truncated=n_truncated,
     )
     print("Initializing a new HyperGPT model from scratch")
     model_args["vocab_size"] = meta_vocab_size if meta_vocab_size is not None else 50304

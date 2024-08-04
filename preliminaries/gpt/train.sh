@@ -8,13 +8,13 @@
 source /work/gg45/g45004/.bashrc
 
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
-export TRITON_CACHE_DIR="/work/gg45/g45004/Looped-Transformer/nanoGPT/tmp"
-export WANDB_CONFIG_DIR="/work/gg45/g45004/Looped-Transformer/nanoGPT/tmp"
+export TRITON_CACHE_DIR="/work/gg45/g45004/Looped-Transformer/preliminaries/gpt/tmp"
+export WANDB_CONFIG_DIR="/work/gg45/g45004/Looped-Transformer/preliminaries/gpt/tmp"
 export WANDB_API_KEY="f1462e37dc61bbcaa335f10a8dd966bbaec5423a"
 
 # torchrun --standalone --nproc_per_node=4 train.py config/train_wikitext-103.py
 # torchrun --standalone --nproc_per_node=2 train.py config/train_looped_wikitext-103.py
 # torchrun --standalone --nproc_per_node=2 train.py config/train_dynamic_looped_wikitext-103.py
-torchrun --standalone --nproc_per_node=2 train.py config/train_universal_wikitext-103.py
+# torchrun --standalone --nproc_per_node=2 train.py config/train_universal_wikitext-103.py
 # torchrun --standalone --nproc_per_node=2 train.py config/train_tying_wikitext-103.py
-# torchrun --standalone --nproc_per_node=2 train.py config/train_hyper_gpt.py
+torchrun --standalone --nproc_per_node=2 train.py config/train_hyper_gpt.py
