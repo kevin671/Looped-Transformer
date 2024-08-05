@@ -28,7 +28,6 @@ import numpy as np
 import optax
 import tqdm
 import wandb
-
 from neural_networks_chomsky_hierarchy.experiments import curriculum as curriculum_lib
 from neural_networks_chomsky_hierarchy.experiments import range_evaluation
 from neural_networks_chomsky_hierarchy.tasks import task as task_lib

@@ -92,7 +92,7 @@ TASK_LEVELS = {
 }
 
 REGULAR_TASKS = [
-    # "modular_arithmetic",
+    "modular_arithmetic",
     "parity_check",
     "even_pairs",
     "cycle_navigation",
@@ -125,7 +125,7 @@ GRAPH_TASKS = [
 
 _TASK_LEVEL = flags.DEFINE_string(
     "task_level",
-    default="graph",
+    default="regular",
     help="Task level (regular, dcf, cs, graph).",
 )
 
@@ -187,14 +187,14 @@ def main(unused_argv) -> None:
         training_params = training.ClassicTrainingParams(
             seed=0,
             model_init_seed=0,
-            training_steps=10_000,  # 1000000,10_000
+            training_steps=1000000,  # 1000000,10_000
             log_frequency=100,
             length_curriculum=curriculum,
             batch_size=_BATCH_SIZE.value,
             task=task,
             model=model,
             loss_fn=loss_fn,
-            learning_rate=0.0005,  # 0.0005,1e-3
+            learning_rate=1e-3,  # 0.0005,1e-3
             accuracy_fn=accuracy_fn,
             compute_full_range_test=True,
             max_range_test_length=1,  # _SEQUENCE_LENGTH.value,

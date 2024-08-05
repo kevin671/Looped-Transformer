@@ -1,3 +1,4 @@
+# %%
 # Copyright 2024 DeepMind Technologies Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,13 +22,14 @@ CF grammar, non-jittable.
 """
 
 import functools
+import sys
 from typing import Optional, Sequence
 
+sys.path.append("/work/gg45/g45004/Looped-Transformer/preliminaries")
 import jax
 import jax.nn as jnn
 import jax.numpy as jnp
 import jax.random as jrandom
-
 from neural_networks_chomsky_hierarchy.tasks import task
 
 # Public as this may be used to encode/decode strings of numbers/symbols.
@@ -112,8 +114,11 @@ def _replace_blanks(expression: jnp.ndarray, modulus: int) -> jnp.ndarray:
 def _evaluate_expression(expression: jnp.ndarray, modulus: int) -> jnp.ndarray:
     """Returns the result of evaluating a modular arithmetic expression."""
     expression = _replace_blanks(expression, modulus)
+    # jax.debug.print("{expression}", expression=expression)
     expression = _replace_subtractions(expression, modulus)
+    # jax.debug.print("{expression}", expression=expression)
     additive_terms = _perform_multiplications(expression, modulus)
+    # jax.debug.print("{additive_terms}", additive_terms=additive_terms)
     return jnp.sum(additive_terms) % modulus
 
 
@@ -147,7 +152,7 @@ class ModularArithmetic(task.GeneralizationTask):
         self._modulus = modulus
         if operators is None:
             operators = ("+", "*", "-")
-        self._operators = (OP_BY_CHARACTER[op] for op in operators)
+        self._operators = [OP_BY_CHARACTER[op] for op in operators]
 
     @functools.partial(jax.jit, static_argnums=(0, 2, 3))
     def sample_batch(
@@ -174,14 +179,17 @@ class ModularArithmetic(task.GeneralizationTask):
         remainders = jax.random.randint(
             rng1, (batch_size, length // 2 + 1), 0, self._modulus
         )
-        ops = self._modulus + jnp.array(list(self._operators))
+        ops = self._modulus + jnp.array(self._operators)
+        # jax.debug.print("{ops}", ops=ops)
 
         operations = jrandom.choice(rng2, ops, (batch_size, length // 2))
         batch = batch.at[:, ::2].set(remainders)
         expressions = batch.at[:, 1::2].set(operations)
+        # jax.debug.print("{expressions}", expressions=expressions)
 
         evaluate = functools.partial(_evaluate_expression, modulus=self._modulus)
         labels = jax.vmap(evaluate)(expressions)
+        # jax.debug.print("{labels}", labels=labels)
         labels = jnn.one_hot(labels, self._modulus)
         one_hot_expressions = jnn.one_hot(
             expressions, self._modulus + len(OP_BY_CHARACTER)
@@ -197,3 +205,16 @@ class ModularArithmetic(task.GeneralizationTask):
     def output_size(self) -> int:
         """Returns the output size for the models."""
         return self._modulus
+
+
+# %%
+
+if __name__ == "__main__":
+    p = ModularArithmetic()
+    rng = jrandom.PRNGKey(0)
+    batch = p.sample_batch(rng, 10, 30)
+    print(batch["input"].shape, batch["output"].shape)  # (5, 9, 4) (5, 5)
+    # print(batch["input"][0], batch["output"][0])
+    print(batch["output"])
+
+# %%

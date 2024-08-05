@@ -21,7 +21,6 @@ import jax
 from jax import nn as jnn
 from jax import numpy as jnp
 from jax import random as jrandom
-
 from neural_networks_chomsky_hierarchy.tasks import task
 
 
